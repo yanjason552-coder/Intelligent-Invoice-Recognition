@@ -1,0 +1,16 @@
+# Development dependencies
+# Generated from pyproject.toml
+# Install with: pip install -r requirements-dev.txt
+# Or install both: pip install -r requirements.txt -r requirements-dev.txt
+
+# Include production dependencies
+-r requirements.txt
+
+# Development dependencies
+pytest>=7.4.3,<8.0.0
+mypy>=1.8.0,<2.0.0
+ruff>=0.2.2,<1.0.0
+pre-commit>=3.6.2,<4.0.0
+types-passlib>=1.7.7.20240106,<2.0.0.0
+coverage>=7.4.3,<8.0.0
+

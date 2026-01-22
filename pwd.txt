@@ -1,0 +1,40 @@
+http://localhost:5173/
+admin@example.com
+changethis
+
+postgres
+Post.&0055
+
+e: && cd \temp\nesting && cd frontend && npm run dev
+e: && cd e:\Temp\sap_mcp\yudao-ui-admin && npm run dev
+
+docker-compose down
+
+docker-compose build --force-recreate
+
+docker-compose up -d db && docker-compose up -d redis
+
+cd frontend && npm run dev
+
+
+/usr/local/pgsql/bin/pg_ctl start -D /usr/local/pgsql/data
+systemctl start svnserve
+/usr/local/bin/redis-server /usr/local/bin/redis.conf
+sudo systemctl restart redis
+
+sudo firewall-cmd --permanent --zone=public --add-port=6379/tcp
+
+
+
+showInfoToast
+
+
+feature_d.featureValue
+
+
+
+
+
+
+
+=LOWER(CONCATENATE(DEC2HEX(RANDBETWEEN(0,POWER(16,8)),8),"-",DEC2HEX(RANDBETWEEN(0,POWER(16,4)),4),"-","4",DEC2HEX(RANDBETWEEN(0,POWER(16,3)),3),"-",DEC2HEX(RANDBETWEEN(8,11)),DEC2HEX(RANDBETWEEN(0,POWER(16,3)),3),"-",DEC2HEX(RANDBETWEEN(0,POWER(16,8)),8),DEC2HEX(RANDBETWEEN(0,POWER(16,4)),4)))
