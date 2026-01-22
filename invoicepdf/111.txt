@@ -1,0 +1,1 @@
+根据E:\Temp\fullstack\backend\database.xlsx中的sheet[sales_order_doc_d_feature]的定义,新建一脚本，在数据库中创建表,表名就是sales_order_doc_d_feature
