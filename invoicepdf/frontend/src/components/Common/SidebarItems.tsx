@@ -90,7 +90,7 @@ const menu: MenuGroup[] = [
     title: "系统配置",
     children: [
       { 
-        title: "大模型配置", 
+        title: "1. 大模型配置", 
         path: "/llm-config",
         children: [
           { title: "配置管理", path: "/llm-config-page", action: "open-tab" },
@@ -98,14 +98,22 @@ const menu: MenuGroup[] = [
         ]
       },
       { 
-        title: "单据模板配置", 
+        title: "2. Schema 配置与监控", 
+        path: "/schema-config-monitoring",
+        children: [
+          { title: "Schema 配置列表", path: "/schema-list", action: "open-tab" },
+          { title: "Schema 识别监控", path: "/schema-monitoring", action: "open-tab" }
+        ]
+      },
+      { 
+        title: "3. 单据模板配置", 
         path: "/template-config",
         children: [
           { title: "模板管理", path: "/template-config-list", action: "open-tab" }
         ]
       },
       { 
-        title: "识别规则", 
+        title: "4. 识别规则", 
         path: "/recognition-rules",
         children: [
           { title: "查询", path: "/recognition-rules-list", action: "open-tab" },
@@ -113,7 +121,7 @@ const menu: MenuGroup[] = [
         ]
       },
       { 
-        title: "审核流程", 
+        title: "5. 审核流程", 
         path: "/review-workflow",
         children: [
           { title: "配置", path: "/review-workflow-config", action: "open-tab" }
@@ -201,22 +209,38 @@ const getMenuIcon = (title: string) => {
     // 系统配置相关
     case "系统配置":
       return FiSettings
+    case "1. 大模型配置":
+      return FiCpu
     case "大模型配置":
       return FiCpu
+    case "2. Schema 配置与监控":
+      return FiDatabase
+    case "Schema 配置与监控":
+      return FiDatabase
+    case "Schema 配置列表":
+      return FiFile
+    case "Schema 识别监控":
+      return FiTrendingUp
+    case "3. 单据模板配置":
+      return FiFileText
     case "单据模板配置":
       return FiFileText
     case "模板管理":
       return FiSliders
+    case "4. 识别规则":
+      return FiTag
+    case "识别规则":
+      return FiTag
+    case "5. 审核流程":
+      return FiLink
+    case "审核流程":
+      return FiLink
     case "配置":
       return FiSliders
     case "配置管理":
       return FiSliders
     case "配置列表":
       return FiFile
-    case "识别规则":
-      return FiTag
-    case "审核流程":
-      return FiLink
     
     // 默认
     default:

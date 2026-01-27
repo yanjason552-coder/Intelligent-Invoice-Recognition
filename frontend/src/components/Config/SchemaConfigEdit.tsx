@@ -39,16 +39,22 @@ const SchemaConfigEdit = ({ schemaData, isEdit = false }: SchemaConfigEditProps)
   const [loading, setLoading] = useState(false)
   const [validating, setValidating] = useState(false)
   const [validationResult, setValidationResult] = useState<{ valid: boolean; message: string; schema_info?: any } | null>(null)
+  const [schemaText, setSchemaText] = useState('')
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
   useEffect(() => {
     if (schemaData) {
+      const schemaDef = typeof schemaData.schema_definition === 'string'
+        ? JSON.parse(schemaData.schema_definition)
+        : schemaData.schema_definition
       setSchema({
         ...schemaData,
-        schema_definition: typeof schemaData.schema_definition === 'string'
-          ? JSON.parse(schemaData.schema_definition)
-          : schemaData.schema_definition
+        schema_definition: schemaDef
       })
+      setSchemaText(JSON.stringify(schemaDef, null, 2))
+    } else {
+      // 创建模式，初始化schemaText
+      setSchemaText(JSON.stringify(schema.schema_definition, null, 2))
     }
   }, [schemaData])
 
@@ -130,16 +136,27 @@ const SchemaConfigEdit = ({ schemaData, isEdit = false }: SchemaConfigEditProps)
   }
 
   const handleSchemaDefinitionChange = (value: string) => {
+    setSchemaText(value) // 总是更新文本内容
+
     try {
       const parsed = JSON.parse(value)
       setSchema({ ...schema, schema_definition: parsed })
-      setValidationResult(null) // 清除之前的验证结果
+      // 成功解析时清除验证结果
+      if (validationResult && !validationResult.valid) {
+        setValidationResult(null)
+      }
     } catch (error) {
-      // JSON格式错误，暂时不更新，但保留输入
-      setValidationResult({
-        valid: false,
-        message: 'JSON格式错误，请检查语法'
-      })
+      // JSON格式错误时，只在有实际内容时显示错误
+      // 空内容或编辑过程中的临时错误不显示
+      if (value.trim() && value.trim() !== '{' && value.trim() !== '[') {
+        setValidationResult({
+          valid: false,
+          message: 'JSON格式错误，请检查语法'
+        })
+      } else {
+        setValidationResult(null)
+      }
+      // 不更新schema_definition，保持上一次的正确值
     }
   }
 
@@ -256,7 +273,7 @@ const SchemaConfigEdit = ({ schemaData, isEdit = false }: SchemaConfigEditProps)
             </Text>
             <Field label="JSON Schema" required>
               <Textarea
-                value={JSON.stringify(schema.schema_definition, null, 2)}
+                value={schemaText}
                 onChange={(e) => handleSchemaDefinitionChange(e.target.value)}
                 placeholder='{
   "$schema": "http://json-schema.org/draft-07/schema#",

@@ -328,7 +328,8 @@ const UserInfo = () => {
         email: formData.email,
         full_name: formData.full_name || null,
         is_active: formData.is_active,
-        is_superuser: formData.is_superuser
+        is_superuser: formData.is_superuser,
+        company_id: formData.company_id || null
       }
 
       if (formData.password) {
@@ -348,7 +349,8 @@ const UserInfo = () => {
 
       showSuccessToast(editingUser ? '用户更新成功' : '用户创建成功')
       setIsOpen(false)
-      loadUsers()
+      // 同时刷新用户列表和公司列表
+      await Promise.all([loadUsers(), loadCompanies()])
     } catch (error: any) {
       showErrorToast(error.message || '保存失败')
     }
@@ -389,12 +391,15 @@ const UserInfo = () => {
           >
             新增用户
           </Button>
-          <IconButton
-            aria-label="刷新"
-            icon={<FiRefreshCw />}
-            onClick={loadUsers}
+          <Button
+            leftIcon={<FiRefreshCw />}
+            onClick={async () => {
+              await Promise.all([loadUsers(), loadCompanies(), loadRoles()])
+            }}
             isLoading={isLoading}
-          />
+          >
+            刷新
+          </Button>
         </Flex>
       </Flex>
 
@@ -407,11 +412,13 @@ const UserInfo = () => {
             onChange={(e) => setSearchTerm(e.target.value)}
             mr={2}
           />
-          <IconButton
-            aria-label="搜索"
-            icon={<FiSearch />}
+          <Button
+            leftIcon={<FiSearch />}
+            colorScheme="green"
             onClick={loadUsers}
-          />
+          >
+            搜索
+          </Button>
         </Flex>
       </Box>
 
@@ -423,6 +430,7 @@ const UserInfo = () => {
               <Table.ColumnHeader>邮箱</Table.ColumnHeader>
               <Table.ColumnHeader>姓名</Table.ColumnHeader>
               <Table.ColumnHeader>公司</Table.ColumnHeader>
+              <Table.ColumnHeader>公司代码</Table.ColumnHeader>
               <Table.ColumnHeader>角色</Table.ColumnHeader>
               <Table.ColumnHeader>是否激活</Table.ColumnHeader>
               <Table.ColumnHeader>是否超级用户</Table.ColumnHeader>
@@ -438,6 +446,7 @@ const UserInfo = () => {
                   <Table.Cell>{user.email}</Table.Cell>
                   <Table.Cell>{user.full_name || '-'}</Table.Cell>
                   <Table.Cell>{userCompany ? userCompany.name : '-'}</Table.Cell>
+                  <Table.Cell>{userCompany ? userCompany.code : '-'}</Table.Cell>
                   <Table.Cell>
                     {userRoleList.length > 0 ? (
                       <HStack gap={1} flexWrap="wrap">

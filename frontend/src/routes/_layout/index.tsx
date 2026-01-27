@@ -37,9 +37,11 @@ import LLMConfigList from "@/components/Config/LLMConfigList"
 import TemplateConfig from "@/components/Config/TemplateConfig"
 import TemplateImport from "@/components/Config/TemplateImport"
 import TemplateEdit from "@/components/Config/TemplateEdit"
+import TemplateEditEnhanced from "@/components/Config/TemplateEditEnhanced"
 // Schema配置组件
 import SchemaConfigList from "@/components/Config/SchemaConfigList"
 import SchemaConfigEdit from "@/components/Config/SchemaConfigEdit"
+import SchemaMonitoring from "@/components/Dashboard/SchemaMonitoring"
 // 系统设置组件
 import UserInfo from "@/components/Settings/UserInfo"
 import RoleInfo from "@/components/Settings/RoleInfo"
@@ -399,6 +401,14 @@ function Dashboard() {
           closable: true
         })
       }
+      else if (type === "schema-monitoring") {
+        addTab({
+          id: "schema-monitoring",
+          title: "Schema 识别监控",
+          content: <SchemaMonitoring />,
+          closable: true
+        })
+      }
       else if (type === "template-config-list") {
         addTab({
           id: "template-config-list",
@@ -420,7 +430,7 @@ function Dashboard() {
         addTab({
           id: `template-edit-${templateId || 'new'}`,
           title: templateId ? "编辑模板" : "新建模板",
-          content: <TemplateEdit templateId={templateId} />,
+          content: <TemplateEditEnhanced templateId={templateId} />,
           closable: true
         })
       }

@@ -3,6 +3,7 @@ import { Box, Text, Flex, Grid, GridItem, HStack, VStack, Skeleton } from "@chak
 import { FiFileText, FiActivity, FiCheckCircle, FiXCircle, FiClock, FiTrendingUp, FiDollarSign, FiLayers } from "react-icons/fi"
 import { getApiUrl, getAuthHeaders } from '../../client/unifiedTypes'
 import LineChart from './LineChart'
+import SchemaMonitoring from './SchemaMonitoring'
 
 interface StatisticsData {
   overview: {
@@ -262,7 +263,7 @@ const Statistics = () => {
       </Box>
 
       {/* 最近发票趋势 - 折线图 */}
-      <Box p={4} bg="white" borderRadius="md" border="1px" borderColor="gray.200" shadow="sm">
+      <Box p={4} bg="white" borderRadius="md" border="1px" borderColor="gray.200" shadow="sm" mb={6}>
         <Text fontSize="lg" fontWeight="bold" mb={4}>最近发票趋势</Text>
         <LineChart
           data={data.daily_stats.map(stat => ({
@@ -275,6 +276,9 @@ const Statistics = () => {
           title=""
         />
       </Box>
+
+      {/* Schema监控指标 */}
+      <SchemaMonitoring />
     </Box>
   )
 }

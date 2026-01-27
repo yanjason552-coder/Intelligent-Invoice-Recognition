@@ -630,6 +630,10 @@ class InvoiceFileListItem(SQLModel):
     uploader_name: Optional[str] = Field(default=None, description="上传人姓名")
     creator_name: Optional[str] = Field(default=None, description="创建人姓名")
     
+    # 公司信息
+    company_id: Optional[UUID] = Field(default=None, description="公司ID")
+    company_code: Optional[str] = Field(default=None, description="公司代码")
+    
     # 模板信息
     template_id: Optional[UUID] = Field(default=None, description="使用的模板ID")
     template_name: Optional[str] = Field(default=None, description="模板名称")
@@ -655,6 +659,12 @@ class Template(SQLModel, table=True):
     
     # 状态
     status: str = Field(default="enabled", max_length=20, description="状态：enabled/disabled/deprecated")
+    
+    # Schema关联
+    default_schema_id: Optional[UUID] = Field(default=None, foreign_key="output_schema.id", description="默认输出结构标准ID")
+    
+    # 提示词
+    prompt: Optional[str] = Field(default=None, sa_column=Column(Text), description="模板提示词，用于指导AI识别")
     
     # 版本管理
     current_version_id: Optional[UUID] = Field(default=None, foreign_key="template_version.id", description="当前版本ID")

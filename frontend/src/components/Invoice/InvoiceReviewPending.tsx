@@ -24,6 +24,7 @@ interface ReviewTask {
   submitTime: string
   submitter: string
   reviewStatus: 'pending' | 'approved' | 'rejected'
+  companyCode: string | null
 }
 
 const InvoiceReviewPending = () => {
@@ -70,7 +71,8 @@ const InvoiceReviewPending = () => {
           supplier: item.supplier_name || '',
           submitTime: item.create_time ? new Date(item.create_time).toLocaleString('zh-CN') : '',
           submitter: '系统', // 后端没有返回提交人信息，使用默认值
-          reviewStatus: item.review_status || 'pending'
+          reviewStatus: item.review_status || 'pending',
+          companyCode: item.company_code || null
         }))
         
         setTableData(transformedData)
@@ -247,6 +249,7 @@ const InvoiceReviewPending = () => {
       field: 'invoiceNo',
       width: 150
     },
+    { headerName: '公司代码', field: 'companyCode', width: 120 },
     { headerName: '票据类型', field: 'invoiceType', width: 150 },
     { headerName: '开票日期', field: 'invoiceDate', width: 120 },
     {
@@ -299,7 +302,8 @@ const InvoiceReviewPending = () => {
     const keyword = searchKeyword.toLowerCase()
     return tableData.filter(item =>
       item.invoiceNo.toLowerCase().includes(keyword) ||
-      (item.supplier && item.supplier.toLowerCase().includes(keyword))
+      (item.supplier && item.supplier.toLowerCase().includes(keyword)) ||
+      (item.companyCode && item.companyCode.toLowerCase().includes(keyword))
     )
   }, [tableData, searchKeyword])
 

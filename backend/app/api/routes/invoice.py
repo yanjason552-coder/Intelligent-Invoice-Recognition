@@ -16,7 +16,7 @@ from app.models.models_invoice import (
     RecognitionTask, RecognitionTaskCreate, RecognitionTaskResponse, RecognitionTaskBatchCreate,
     RecognitionResult, RecognitionResultResponse,
     RecognitionField, ReviewRecord, InvoiceFileListItem,
-    ModelConfig, OutputSchema, InvoiceItem, InvoiceItemUpdate, InvoiceItemsBatchUpdate
+    OutputSchema, LLMConfig, InvoiceItem, InvoiceItemUpdate, InvoiceItemsBatchUpdate
 )
 from sqlmodel import SQLModel, Field
 
@@ -36,6 +36,29 @@ import os
 BACKEND_DIR = Path(__file__).parent.parent.parent.parent  # 从 routes/invoice.py 到 backend 目录
 UPLOAD_DIR = BACKEND_DIR / "uploads" / "invoices"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# 辅助函数：添加公司过滤条件
+def add_company_filter(statement, current_user, conditions=None):
+    """
+    根据用户的公司ID过滤发票查询
+    超级用户可以查看所有发票，普通用户只能查看自己公司的发票
+    """
+    if conditions is None:
+        conditions = []
+    
+    # 如果不是超级用户，添加公司过滤条件
+    if not current_user.is_superuser:
+        if current_user.company_id:
+            conditions.append(Invoice.company_id == current_user.company_id)
+        else:
+            # 如果用户没有关联公司，返回空结果（使用一个永远为False的条件）
+            conditions.append(Invoice.id.is_(None))
+    
+    if conditions:
+        statement = statement.where(and_(*conditions))
+    
+    return statement, conditions
 
 
 @router.post("/upload", response_model=Message)
@@ -156,6 +179,7 @@ def upload_invoice(
             invoice_type="未知",
             file_id=invoice_file.id,
             creator_id=current_user.id,
+            company_id=current_user.company_id,  # 自动设置用户的公司ID
             recognition_status="pending",
             review_status="pending"
         )
@@ -280,6 +304,7 @@ def upload_invoice_external(
             invoice_type="未知",
             file_id=invoice_file.id,
             creator_id=current_user.id,
+            company_id=current_user.company_id,  # 自动设置用户的公司ID
             recognition_status="pending",
             review_status="pending"
         )
@@ -335,7 +360,7 @@ def get_recognition_tasks(
         model_configs_dict = {}
         if model_config_ids:
             model_configs = session.exec(
-                select(ModelConfig).where(ModelConfig.id.in_(list(model_config_ids)))
+                select(LLMConfig).where(LLMConfig.id.in_(list(model_config_ids)))
             ).all()
             model_configs_dict = {config.id: config for config in model_configs}
         
@@ -350,7 +375,7 @@ def get_recognition_tasks(
                     status=task.status,
                     provider=task.provider,
                     recognition_mode=task.params.get("recognition_mode") if task.params else None,
-                    model_name=model_configs_dict.get(UUID(task.params.get("model_config_id"))).model_name if task.params and task.params.get("model_config_id") and UUID(task.params.get("model_config_id")) in model_configs_dict else None,
+                    model_name=model_configs_dict.get(UUID(task.params.get("model_config_id"))).name if task.params and task.params.get("model_config_id") and UUID(task.params.get("model_config_id")) in model_configs_dict else None,
                     start_time=task.start_time,
                     end_time=task.end_time,
                     create_time=task.create_time
@@ -382,14 +407,22 @@ def create_recognition_task(
             raise HTTPException(status_code=404, detail="票据不存在")
         
         # 验证模型配置是否存在且可用
-        model_config = session.get(ModelConfig, task_in.params.model_config_id)
+        model_config = session.get(LLMConfig, task_in.params.model_config_id)
         if not model_config:
             raise HTTPException(status_code=404, detail="模型配置不存在")
         if not model_config.is_active:
             raise HTTPException(status_code=400, detail="模型配置未启用")
         
-        # 验证识别方式是否在允许列表中
-        if task_in.params.recognition_mode not in model_config.allowed_modes:
+        # 根据 app_type 验证识别方式是否在允许列表中
+        allowed_modes = ["llm_extract", "ocr_llm", "template"]
+        if model_config.app_type == "chat":
+            allowed_modes = ["llm_extract", "ocr_llm"]
+        elif model_config.app_type == "workflow":
+            allowed_modes = ["llm_extract", "ocr_llm", "template"]
+        elif model_config.app_type == "completion":
+            allowed_modes = ["llm_extract"]
+        
+        if task_in.params.recognition_mode not in allowed_modes:
             raise HTTPException(status_code=400, detail=f"识别方式 {task_in.params.recognition_mode} 不在允许列表中")
         
         # 模板策略处理（模板功能已废弃，template_id 设为 None）
@@ -442,7 +475,7 @@ def create_recognition_task(
         session.refresh(task)
         
         # 获取模型名称用于响应
-        model_name = model_config.model_name
+        model_name = model_config.name
         
         return RecognitionTaskResponse(
             id=task.id,
@@ -492,7 +525,7 @@ def start_recognition(
             raise HTTPException(status_code=400, detail="任务参数中缺少model_config_id")
         
         # 验证模型配置
-        model_config = session.get(ModelConfig, UUID(model_config_id))
+        model_config = session.get(LLMConfig, UUID(model_config_id))
         if not model_config:
             raise HTTPException(status_code=404, detail="模型配置不存在")
         if not model_config.is_active:
@@ -612,14 +645,22 @@ async def batch_create_recognition_tasks(
     
     try:
         # 验证模型配置
-        model_config = session.get(ModelConfig, batch_in.params.model_config_id)
+        model_config = session.get(LLMConfig, batch_in.params.model_config_id)
         if not model_config:
             raise HTTPException(status_code=404, detail="模型配置不存在")
         if not model_config.is_active:
             raise HTTPException(status_code=400, detail="模型配置未启用")
         
-        # 验证识别方式
-        if batch_in.params.recognition_mode not in model_config.allowed_modes:
+        # 根据 app_type 验证识别方式是否在允许列表中
+        allowed_modes = ["llm_extract", "ocr_llm", "template"]
+        if model_config.app_type == "chat":
+            allowed_modes = ["llm_extract", "ocr_llm"]
+        elif model_config.app_type == "workflow":
+            allowed_modes = ["llm_extract", "ocr_llm", "template"]
+        elif model_config.app_type == "completion":
+            allowed_modes = ["llm_extract"]
+        
+        if batch_in.params.recognition_mode not in allowed_modes:
             raise HTTPException(status_code=400, detail=f"识别方式 {batch_in.params.recognition_mode} 不在允许列表中")
         
         # 验证所有文件是否存在
@@ -768,10 +809,9 @@ def query_invoices(
             logger.debug(f"添加查询条件: recognition_status = '{recognition_status}'")
             conditions.append(Invoice.recognition_status == recognition_status)
         
-        # 使用 AND 关系组合所有条件
-        if conditions:
-            statement = statement.where(and_(*conditions))
-            logger.debug(f"应用了 {len(conditions)} 个查询条件（AND关系）")
+        # 添加公司过滤条件（超级用户可以查看所有，普通用户只能查看自己公司的）
+        statement, conditions = add_company_filter(statement, current_user, conditions)
+        logger.debug(f"应用了 {len(conditions)} 个查询条件（AND关系）")
         
         # 总数
         count_statement = select(func.count()).select_from(Invoice)
@@ -783,6 +823,27 @@ def query_invoices(
         # 分页查询
         invoices = session.exec(statement.order_by(Invoice.create_time.desc()).offset(skip).limit(limit)).all()
         logger.info(f"返回记录数: {len(invoices)}")
+        
+        # 批量获取公司代码
+        from app.models.models_company import Company
+        company_ids = set()
+        for inv in invoices:
+            # 安全地获取company_id，如果字段不存在则返回None
+            try:
+                company_id = getattr(inv, 'company_id', None)
+                if company_id:
+                    company_ids.add(company_id)
+            except Exception:
+                pass
+        
+        companies_dict = {}
+        if company_ids:
+            try:
+                companies = session.exec(select(Company).where(Company.id.in_(list(company_ids)))).all()
+                companies_dict = {c.id: c.code for c in companies}
+            except Exception as e:
+                logger.warning(f"获取公司代码失败: {str(e)}")
+        
         logger.info("=== 票据查询结束 ===")
         
         return {
@@ -803,6 +864,8 @@ def query_invoices(
                     recognition_accuracy=inv.recognition_accuracy,
                     recognition_status=inv.recognition_status,
                     review_status=inv.review_status,
+                    company_id=getattr(inv, 'company_id', None),
+                    company_code=companies_dict.get(getattr(inv, 'company_id', None)) if getattr(inv, 'company_id', None) else None,
                     create_time=inv.create_time
                 ).model_dump()
                 for inv in invoices
@@ -812,6 +875,7 @@ def query_invoices(
             "limit": limit
         }
     except Exception as e:
+        logger.error(f"查询失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
 
@@ -860,6 +924,14 @@ def get_invoice_files_list(
             conditions.append(Invoice.review_status == review_status)
         if uploader_id:
             conditions.append(InvoiceFile.uploader_id == uploader_id)
+        
+        # 添加公司过滤条件（超级用户可以查看所有，普通用户只能查看自己公司的）
+        if not current_user.is_superuser:
+            if current_user.company_id:
+                conditions.append(Invoice.company_id == current_user.company_id)
+            else:
+                # 如果用户没有关联公司，返回空结果
+                conditions.append(Invoice.company_id.is_(None))
         
         if conditions:
             statement = statement.where(and_(*conditions))
@@ -921,6 +993,14 @@ def get_invoice_files_list(
                 # 第一个任务（按create_time倒序）就是最新的
                 if task_counts[invoice_id]['last_task_id'] is None:
                     task_counts[invoice_id]['last_task_id'] = task_id
+        
+        # 批量获取公司代码
+        from app.models.models_company import Company
+        company_ids = {inv.company_id for _, inv in results if getattr(inv, 'company_id', None)}
+        companies_dict = {}
+        if company_ids:
+            companies = session.exec(select(Company).where(Company.id.in_(list(company_ids)))).all()
+            companies_dict = {c.id: c.code for c in companies}
         
         # 构建响应数据
         list_items = []
@@ -990,6 +1070,10 @@ def get_invoice_files_list(
                 uploader_name=uploader.email if uploader else None,
                 creator_name=creator.email if creator else None,
                 
+                # 公司信息
+                company_id=getattr(invoice, 'company_id', None),
+                company_code=companies_dict.get(getattr(invoice, 'company_id', None)) if getattr(invoice, 'company_id', None) else None,
+                
                 # 模板信息（模板功能已废弃）
                 template_id=None,
                 template_name=None,  # 模板功能已废弃
@@ -1031,6 +1115,19 @@ def get_invoice(
     if not invoice:
         raise HTTPException(status_code=404, detail="票据不存在")
     
+    # 检查权限：如果不是超级用户，只能查看自己公司的发票
+    if not current_user.is_superuser:
+        if invoice.company_id != current_user.company_id:
+            raise HTTPException(status_code=403, detail="无权访问此票据")
+    
+    # 获取公司代码
+    company_code = None
+    if invoice.company_id:
+        from app.models.models_company import Company
+        company = session.get(Company, invoice.company_id)
+        if company:
+            company_code = company.code
+    
     return InvoiceResponse(
         id=invoice.id,
         invoice_no=invoice.invoice_no,
@@ -1047,6 +1144,8 @@ def get_invoice(
         recognition_accuracy=invoice.recognition_accuracy,
         recognition_status=invoice.recognition_status,
         review_status=invoice.review_status,
+        company_id=invoice.company_id,
+        company_code=company_code,
         create_time=invoice.create_time
     )
 
@@ -1258,14 +1357,24 @@ def get_pending_reviews(
     try:
         statement = select(Invoice).where(Invoice.review_status == "pending")
         
+        # 添加公司过滤条件（超级用户可以查看所有，普通用户只能查看自己公司的）
+        conditions = [Invoice.review_status == "pending"]
+        statement, conditions = add_company_filter(statement, current_user, conditions)
+        
         # 总数
-        count_statement = select(func.count()).select_from(Invoice).where(
-            Invoice.review_status == "pending"
-        )
+        count_statement = select(func.count()).select_from(Invoice).where(and_(*conditions))
         total = session.exec(count_statement).one()
         
         # 分页查询
         invoices = session.exec(statement.order_by(Invoice.create_time.desc()).offset(skip).limit(limit)).all()
+        
+        # 批量获取公司代码
+        from app.models.models_company import Company
+        company_ids = {inv.company_id for inv in invoices if inv.company_id}
+        companies_dict = {}
+        if company_ids:
+            companies = session.exec(select(Company).where(Company.id.in_(list(company_ids)))).all()
+            companies_dict = {c.id: c.code for c in companies}
         
         return {
             "data": [
@@ -1285,6 +1394,8 @@ def get_pending_reviews(
                     recognition_accuracy=inv.recognition_accuracy,
                     recognition_status=inv.recognition_status,
                     review_status=inv.review_status,
+                    company_id=inv.company_id,
+                    company_code=companies_dict.get(inv.company_id) if inv.company_id else None,
                     create_time=inv.create_time
                 ).model_dump()
                 for inv in invoices

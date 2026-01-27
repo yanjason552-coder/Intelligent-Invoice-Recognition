@@ -8,6 +8,7 @@ import { RouterProvider, createRouter } from "@tanstack/react-router"
 import React, { StrictMode } from "react"
 import ReactDOM from "react-dom/client"
 import { routeTree } from "./routeTree.gen"
+import axios from "axios"
 
 import { ApiError, OpenAPI } from "./client"
 import { CustomProvider } from "./components/ui/provider"
@@ -16,6 +17,20 @@ OpenAPI.BASE = import.meta.env.VITE_API_URL
 OpenAPI.TOKEN = async () => {
   return localStorage.getItem("access_token") || ""
 }
+
+// 配置全局 axios 拦截器处理 401 错误
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error?.response?.status === 401) {
+      // 清除过期的 token
+      localStorage.removeItem("access_token")
+      // 重定向到登录页
+      window.location.href = "/login"
+    }
+    return Promise.reject(error)
+  }
+)
 
 const handleApiError = (error: Error) => {
   if (error instanceof ApiError && [401, 403].includes(error.status)) {

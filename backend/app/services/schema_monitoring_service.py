@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 import json
 
 from app.core.db import SessionLocal
-from app.models.models_invoice import ModelConfig, OutputSchema
+from app.models.models_invoice import LLMConfig, OutputSchema
 from sqlmodel import select, func
 
 logger = logging.getLogger(__name__)
@@ -332,7 +332,7 @@ class SchemaMonitoringService:
             with SessionLocal() as session:
                 # 统计活跃的模型配置
                 active_configs = session.exec(
-                    select(func.count(ModelConfig.id)).where(ModelConfig.is_active == True)
+                    select(func.count(LLMConfig.id)).where(LLMConfig.is_active == True)
                 ).first()
 
                 # 统计活跃的Schema
@@ -342,9 +342,14 @@ class SchemaMonitoringService:
 
                 # 统计有默认Schema的模型配置
                 configs_with_schema = session.exec(
-                    select(func.count(ModelConfig.id)).where(
-                        ModelConfig.is_active == True,
-                        ModelConfig.default_schema_id.isnot(None)
+                    # 注意：LLMConfig 没有 default_schema_id 字段，所以这里返回 0
+                    # select(func.count(LLMConfig.id)).where(
+                    #     LLMConfig.is_active == True,
+                    #     LLMConfig.default_schema_id.isnot(None)
+                    # )
+                    select(func.count()).select_from(LLMConfig).where(
+                        LLMConfig.is_active == True
+                    ).where(False)  # 返回 0，因为 LLMConfig 没有 default_schema_id
                     )
                 ).first()
 

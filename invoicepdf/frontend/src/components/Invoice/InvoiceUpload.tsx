@@ -185,6 +185,7 @@ const InvoiceUpload = () => {
       selectedModelConfig.endpoint = fullConfig.endpoint
     }
 
+    let hasError = false
     for (const fileItem of uploadedFiles) {
       postDebugLog({
         runId: 'pre-run',
@@ -225,13 +226,15 @@ const InvoiceUpload = () => {
           data: { fileId: fileItem.id, name: fileItem.name, mode: uploadMode }
         })
       } catch (error: any) {
+        hasError = true
         setUploadedFiles(prev =>
           prev.map(f =>
             f.id === fileItem.id ? { ...f, status: 'error' } : f
           )
         )
 
-        const errorMessage = error?.response?.data?.detail || error?.message || '上传失败'
+        // 优先使用 error.message（这是我们抛出的自定义错误消息）
+        const errorMessage = error?.message || error?.response?.data?.detail || error?.response?.data?.message || '上传失败'
         showErrorToast(`上传失败: ${fileItem.name} - ${errorMessage}`)
         postDebugLog({
           runId: 'pre-run',
@@ -243,7 +246,10 @@ const InvoiceUpload = () => {
       }
     }
 
-    showSuccessToast('文件上传完成')
+    // 只有在没有错误时才显示"文件上传完成"
+    if (!hasError) {
+      showSuccessToast('文件上传完成')
+    }
     postDebugLog({
       runId: 'pre-run',
       hypothesisId: 'H1',
@@ -283,36 +289,55 @@ const InvoiceUpload = () => {
         const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
         const uploadUrl = `${apiBaseUrl}/api/v1/invoices/upload${allowDuplicate ? '?allow_duplicate=true' : ''}`
 
-        // 调用上传API
-        const response = await axios.post(
-          uploadUrl,
-          formData,
-          {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'multipart/form-data',
-            },
-            onUploadProgress: (progressEvent) => {
-              if (progressEvent.total) {
-                const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
-                setUploadedFiles(prev =>
-                  prev.map(f =>
-                    f.id === fileItem.id ? { ...f, progress } : f
+        try {
+          // 调用上传API
+          const response = await axios.post(
+            uploadUrl,
+            formData,
+            {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'multipart/form-data',
+              },
+              onUploadProgress: (progressEvent) => {
+                if (progressEvent.total) {
+                  const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+                  setUploadedFiles(prev =>
+                    prev.map(f =>
+                      f.id === fileItem.id ? { ...f, progress } : f
+                    )
                   )
-                )
-                postDebugLog({
-                  runId: 'pre-run',
-                  hypothesisId: 'H3',
-                  location: 'InvoiceUpload.tsx:uploadToLocalAPI',
-                  message: 'progress',
-                  data: { fileId: fileItem.id, progress }
-                })
-              }
-            },
+                  postDebugLog({
+                    runId: 'pre-run',
+                    hypothesisId: 'H3',
+                    location: 'InvoiceUpload.tsx:uploadToLocalAPI',
+                    message: 'progress',
+                    data: { fileId: fileItem.id, progress }
+                  })
+                }
+              },
+            }
+          )
+          return response
+        } catch (error: any) {
+          // 处理 401 未授权错误
+          if (error?.response?.status === 401) {
+            postDebugLog({
+              runId: 'pre-run',
+              hypothesisId: 'H1',
+              location: 'InvoiceUpload.tsx:uploadToLocalAPI',
+              message: '401 unauthorized, clearing token',
+              data: { fileId: fileItem.id, name: fileItem.name }
+            })
+            // 清除过期的 token
+            localStorage.removeItem('access_token')
+            // 重定向到登录页
+            window.location.href = '/login'
+            throw new Error('登录已过期，请重新登录')
           }
-        )
-
-    return response
+          // 重新抛出其他错误
+          throw error
+        }
   }
 
   const uploadToModelAPI = async (fileItem: UploadedFile, config: LLMConfig) => {
@@ -350,33 +375,51 @@ const InvoiceUpload = () => {
     formData.append('user', userName)
 
     // 调用外部 API
-    const externalResponse = await axios.post(
-      uploadUrl,
-      formData,
-      {
-        headers: {
-          'Authorization': `Bearer ${config.api_key}`,
-          'Content-Type': 'multipart/form-data',
-        },
-        onUploadProgress: (progressEvent) => {
-          if (progressEvent.total) {
-            const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
-        setUploadedFiles(prev =>
-          prev.map(f =>
-                f.id === fileItem.id ? { ...f, progress } : f
+    let externalResponse
+    try {
+      externalResponse = await axios.post(
+        uploadUrl,
+        formData,
+        {
+          headers: {
+            'Authorization': `Bearer ${config.api_key}`,
+            'Content-Type': 'multipart/form-data',
+          },
+          onUploadProgress: (progressEvent) => {
+            if (progressEvent.total) {
+              const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+          setUploadedFiles(prev =>
+            prev.map(f =>
+                  f.id === fileItem.id ? { ...f, progress } : f
+            )
           )
-        )
-            postDebugLog({
-              runId: 'pre-run',
-              hypothesisId: 'H3',
-              location: 'InvoiceUpload.tsx:uploadToModelAPI',
-              message: 'external upload progress',
-              data: { fileId: fileItem.id, progress }
-            })
-          }
-        },
+              postDebugLog({
+                runId: 'pre-run',
+                hypothesisId: 'H3',
+                location: 'InvoiceUpload.tsx:uploadToModelAPI',
+                message: 'external upload progress',
+                data: { fileId: fileItem.id, progress }
+              })
+            }
+          },
+        }
+      )
+    } catch (error: any) {
+      // 处理外部 API 的错误
+      if (error?.response?.status === 401) {
+        postDebugLog({
+          runId: 'pre-run',
+          hypothesisId: 'H2',
+          location: 'InvoiceUpload.tsx:uploadToModelAPI',
+          message: 'external API 401 unauthorized',
+          data: { fileId: fileItem.id, name: fileItem.name, endpoint: config.endpoint }
+        })
+        throw new Error(`外部 API 认证失败：模型配置 "${config.name}" 的 API 密钥无效或已过期，请检查模型配置`)
       }
-    )
+      // 重新抛出其他错误
+      const errorMessage = error?.response?.data?.detail || error?.response?.data?.message || error?.message || '外部 API 请求失败'
+      throw new Error(`外部 API 错误：${errorMessage}`)
+    }
 
     // 解析外部 API 返回的 JSON，获取 id
     const externalFileId = externalResponse.data?.id
@@ -421,26 +464,46 @@ const InvoiceUpload = () => {
     backendFormData.append('file', fileItem.file)
     backendFormData.append('external_file_id', externalFileId)
 
-    // 调用后端接口保存
-    const backendResponse = await axios.post(
-      saveUrl,
-      backendFormData,
-      {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'multipart/form-data',
-        },
-      }
-    )
+    try {
+      // 调用后端接口保存
+      const backendResponse = await axios.post(
+        saveUrl,
+        backendFormData,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'multipart/form-data',
+          },
+        }
+      )
 
-    postDebugLog({
-      runId: 'pre-run',
-      hypothesisId: 'H2',
-      location: 'InvoiceUpload.tsx:uploadToModelAPI',
-      message: 'backend save success',
-      data: { fileId: fileItem.id, externalFileId }
-    })
-    return backendResponse
+      postDebugLog({
+        runId: 'pre-run',
+        hypothesisId: 'H2',
+        location: 'InvoiceUpload.tsx:uploadToModelAPI',
+        message: 'backend save success',
+        data: { fileId: fileItem.id, externalFileId }
+      })
+      return backendResponse
+    } catch (error: any) {
+      // 处理 401 未授权错误
+      if (error?.response?.status === 401) {
+        postDebugLog({
+          runId: 'pre-run',
+          hypothesisId: 'H2',
+          location: 'InvoiceUpload.tsx:uploadToModelAPI',
+          message: '401 unauthorized, clearing token',
+          data: { fileId: fileItem.id, name: fileItem.name, externalFileId }
+        })
+        // 清除过期的 token
+        localStorage.removeItem('access_token')
+        // 重定向到登录页
+        window.location.href = '/login'
+        throw new Error('登录已过期，请重新登录')
+      }
+      // 重新抛出其他错误
+      throw error
+    }
   }
 
   const formatFileSize = (bytes: number) => {

@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 import uuid
 
 from app.core.db import SessionLocal
-from app.models.models_invoice import OutputSchema, ModelConfig
+from app.models.models_invoice import OutputSchema, LLMConfig
 from sqlmodel import select
 
 logger = logging.getLogger(__name__)
@@ -357,12 +357,10 @@ class SchemaValidationService:
                         return schema_obj.schema_definition
 
                 if model_config_id:
-                    # 通过模型配置获取默认Schema
-                    model_config = session.get(ModelConfig, model_config_id)
-                    if model_config and model_config.default_schema_id:
-                        schema_obj = session.get(OutputSchema, model_config.default_schema_id)
-                        if schema_obj and schema_obj.is_active:
-                            return schema_obj.schema_definition
+                    # 注意：LLMConfig 没有 default_schema_id 字段
+                    # 如果需要通过模型配置获取默认Schema，需要从任务参数中获取 output_schema_id
+                    # 这里暂时跳过，因为 LLMConfig 不包含默认 schema 信息
+                    pass
 
                 # 返回默认的发票Schema（如果存在）
                 default_schema = session.exec(

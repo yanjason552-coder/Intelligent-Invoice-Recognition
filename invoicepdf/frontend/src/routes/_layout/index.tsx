@@ -37,6 +37,10 @@ import LLMConfigList from "@/components/Config/LLMConfigList"
 import TemplateConfig from "@/components/Config/TemplateConfig"
 import TemplateImport from "@/components/Config/TemplateImport"
 import TemplateEdit from "@/components/Config/TemplateEdit"
+// Schema配置组件
+import SchemaConfigList from "@/components/Config/SchemaConfigList"
+import SchemaConfigEdit from "@/components/Config/SchemaConfigEdit"
+import SchemaMonitoring from "@/components/Dashboard/SchemaMonitoring"
 // 系统设置组件
 import UserInfo from "@/components/Settings/UserInfo"
 import RoleInfo from "@/components/Settings/RoleInfo"

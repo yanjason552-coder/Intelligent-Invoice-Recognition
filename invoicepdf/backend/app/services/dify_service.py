@@ -20,7 +20,7 @@ except ImportError:
 
 from app.models.models_invoice import (
     RecognitionTask, RecognitionResult, Invoice, InvoiceFile,
-    ModelConfig, OutputSchema, LLMConfig, InvoiceItem
+    OutputSchema, LLMConfig, InvoiceItem
 )
 
 # 配置日志 - 确保日志级别为INFO
@@ -79,11 +79,19 @@ class SyntaxService:
         Returns:
             bool: 是否成功
         """
+        logger.info("=" * 80)
+        logger.info(f"=== 开始处理识别任务: {task_id} ===")
+        logger.info(f"时间戳: {datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
+        logger.info("=" * 80)
         try:
+            logger.info(f"[步骤1] 获取任务对象: {task_id}")
             task = self.session.get(RecognitionTask, task_id)
             if not task:
-                logger.error(f"任务不存在: {task_id}")
+                logger.error(f"[步骤1失败] 任务不存在: {task_id}")
                 return False
+            
+            logger.info(f"[步骤1成功] 任务状态: {task.status}")
+            logger.info(f"[步骤1成功] 任务参数: {task.params}")
             
             if not task.params:
                 logger.error(f"任务参数不存在: {task_id}")
@@ -91,43 +99,74 @@ class SyntaxService:
                 return False
             
             # 获取模型配置
+            logger.info(f"[步骤2] 获取模型配置ID")
             model_config_id = task.params.get("model_config_id")
             if not model_config_id:
-                logger.error(f"任务参数中缺少model_config_id: {task_id}")
+                logger.error(f"[步骤2失败] 任务参数中缺少model_config_id: {task_id}")
                 self._mark_task_failed(task, "DIFY_BAD_PARAMS", "任务参数中缺少model_config_id")
                 return False
             
-            model_config = self.session.get(ModelConfig, UUID(model_config_id))
+            logger.info(f"[步骤2成功] 模型配置ID: {model_config_id}")
+            logger.info(f"[步骤3] 查询模型配置对象")
+            model_config = self.session.get(LLMConfig, UUID(model_config_id))
             if not model_config:
-                logger.error(f"模型配置不存在: {model_config_id}")
+                logger.error(f"[步骤3失败] 模型配置不存在: {model_config_id}")
                 self._mark_task_failed(task, "DIFY_BAD_PARAMS", "模型配置不存在")
                 return False
             
+            logger.info(f"[步骤3成功] 模型配置名称: {model_config.name}")
+            
             # 获取文件信息
+            logger.info(f"[步骤4] 获取票据信息: {task.invoice_id}")
             invoice = self.session.get(Invoice, task.invoice_id)
             if not invoice:
-                logger.error(f"票据不存在: {task.invoice_id}")
+                logger.error(f"[步骤4失败] 票据不存在: {task.invoice_id}")
                 self._mark_task_failed(task, "FILE_NOT_FOUND", "票据不存在")
                 return False
             
+            logger.info(f"[步骤4成功] 票据编号: {invoice.invoice_no}")
+            logger.info(f"[步骤5] 获取文件信息: {invoice.file_id}")
             file = self.session.get(InvoiceFile, invoice.file_id)
             if not file:
-                logger.error(f"文件不存在: {invoice.file_id}")
+                logger.error(f"[步骤5失败] 文件不存在: {invoice.file_id}")
                 self._mark_task_failed(task, "FILE_NOT_FOUND", "文件不存在")
                 return False
             
+            logger.info(f"[步骤5成功] 文件名: {file.file_name}")
+            logger.info(f"[步骤6] 检查文件路径: {file.file_path}")
             if not Path(file.file_path).exists():
-                logger.error(f"文件路径不存在: {file.file_path}")
+                logger.error(f"[步骤6失败] 文件路径不存在: {file.file_path}")
                 self._mark_task_failed(task, "FILE_NOT_FOUND", "文件路径不存在")
                 return False
             
+            logger.info(f"[步骤6成功] 文件存在，大小: {Path(file.file_path).stat().st_size} 字节")
+            
             # 调用Dify API
+            logger.info("=" * 80)
+            logger.info("=== 准备调用 DIFY API ===")
+            logger.info(f"[步骤7] 准备调用API")
+            logger.info(f"模型配置ID: {model_config.id}")
+            logger.info(f"模型配置名称: {model_config.name}")
+            logger.info(f"API端点: {model_config.endpoint}")
+            logger.info(f"时间戳: {datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
+            logger.info("=" * 80)
             result = self._call_dify_api(task, model_config, file)
+            
+            logger.info("=" * 80)
+            logger.info(f"[步骤8] DIFY API 调用结果")
+            logger.info(f"成功: {result.get('success')}")
+            if not result.get("success"):
+                logger.error(f"[步骤8失败] 错误代码: {result.get('error_code')}")
+                logger.error(f"[步骤8失败] 错误消息: {result.get('error_message')}")
+            logger.info("=" * 80)
             
             if result["success"]:
                 # 保存识别结果
+                logger.info(f"[步骤9] 保存识别结果")
                 self._save_result(task, invoice, result["data"])
+                logger.info(f"[步骤10] 标记任务完成")
                 self._mark_task_completed(task)
+                logger.info(f"[步骤10成功] 任务处理完成")
                 return True
             else:
                 # 标记任务失败
@@ -144,7 +183,11 @@ class SyntaxService:
                 return False
                 
         except Exception as e:
-            logger.error(f"处理任务失败: {task_id}, 错误: {str(e)}", exc_info=True)
+            logger.error("=" * 80)
+            logger.error(f"=== 处理任务失败: {task_id} ===")
+            logger.error(f"错误类型: {type(e).__name__}")
+            logger.error(f"错误消息: {str(e)}")
+            logger.error("=" * 80, exc_info=True)
             task = self.session.get(RecognitionTask, task_id)
             if task:
                 self._mark_task_failed(task, "INTERNAL_ERROR", str(e))
@@ -153,7 +196,7 @@ class SyntaxService:
     def _call_dify_api(
         self,
         task: RecognitionTask,
-        model_config: ModelConfig,
+        model_config: LLMConfig,
         file: InvoiceFile
     ) -> Dict[str, Any]:
         """
@@ -167,10 +210,19 @@ class SyntaxService:
         Returns:
             dict: 包含success、data或error_code、error_message
         """
+        logger.info("=" * 80)
+        logger.info("=== 开始调用 DIFY API ===")
+        logger.info(f"任务ID: {task.id}")
+        logger.info(f"文件ID: {file.id}")
+        logger.info(f"模型配置ID: {model_config.id}")
+        logger.info("=" * 80)
         try:
-            # 获取API配置（优先使用syntax_*字段，兼容dify_*字段）
-            endpoint = model_config.syntax_endpoint or model_config.dify_endpoint
-            api_key = model_config.syntax_api_key or model_config.dify_api_key
+            # 获取API配置（从 llm_config 表）
+            endpoint = model_config.endpoint
+            api_key = model_config.api_key
+            
+            logger.info(f"API端点: {endpoint}")
+            logger.info(f"API Key: {'*' * 20 if api_key else '未设置'}")
             
             if not endpoint:
                 return {
@@ -196,6 +248,12 @@ class SyntaxService:
             
             if not file.external_file_id:
                 # H7: 本地上传文件没有external_file_id，识别时自动上传到外部API并回填
+                logger.info("=" * 80)
+                logger.info("[步骤A] 文件缺少external_file_id，开始自动上传")
+                logger.info(f"文件ID: {file.id}")
+                logger.info(f"文件名: {file.file_name}")
+                logger.info(f"文件类型: {file.file_type}")
+                logger.info("=" * 80)
                 _dbg_log("pre-run", "H7", "dify_service.py:_call_dify_api", "external_file_id missing; try auto upload", {
                     "fileId": str(file.id),
                     "fileName": file.file_name,
@@ -207,13 +265,23 @@ class SyntaxService:
                     user_id = f"user_{task.operator_id}"
                     headers_upload = {"Authorization": f"Bearer {api_key}"}
                     file_path = Path(file.file_path)
+                    
+                    logger.info(f"[步骤A1] 检查本地文件: {file_path}")
                     if not file_path.exists():
+                        logger.error(f"[步骤A1失败] 本地文件不存在: {file_path}")
                         return {
                             "success": False,
                             "error_code": "FILE_NOT_FOUND",
                             "error_message": "本地文件不存在，无法上传到外部API"
                         }
+                    
+                    logger.info(f"[步骤A1成功] 文件存在，大小: {file_path.stat().st_size} 字节")
+                    logger.info(f"[步骤A2] 准备上传到: {upload_url}")
+                    logger.info(f"[步骤A2] 用户ID: {user_id}")
+                    
+                    upload_start_time = datetime.now()
                     # 注意：不记录 api_key 等敏感信息
+                    logger.info(f"[步骤A3] 开始上传文件...")
                     with httpx.Client(timeout=300.0) as client:
                         with open(file_path, "rb") as fp:
                             files = {
@@ -221,8 +289,16 @@ class SyntaxService:
                             }
                             data = {"user": user_id}
                             resp = client.post(upload_url, files=files, data=data, headers=headers_upload)
+                    
+                    upload_elapsed = (datetime.now() - upload_start_time).total_seconds()
+                    logger.info(f"[步骤A3完成] 上传耗时: {upload_elapsed:.2f} 秒")
+                    logger.info(f"[步骤A4] HTTP状态码: {resp.status_code}")
                     if not (200 <= resp.status_code < 300):
-                        logger.error(f"自动上传外部API失败，HTTP状态码: {resp.status_code}")
+                        logger.error("=" * 80)
+                        logger.error(f"[步骤A4失败] 自动上传外部API失败")
+                        logger.error(f"HTTP状态码: {resp.status_code}")
+                        logger.error(f"响应内容: {resp.text[:500]}")
+                        logger.error("=" * 80)
                         _dbg_log("pre-run", "H7", "dify_service.py:_call_dify_api", "auto upload failed", {
                             "fileId": str(file.id),
                             "statusCode": resp.status_code,
@@ -232,13 +308,24 @@ class SyntaxService:
                             "error_code": "EXTERNAL_UPLOAD_FAILED",
                             "error_message": f"自动上传外部API失败，HTTP状态码: {resp.status_code}"
                         }
+                    
+                    logger.info(f"[步骤A4成功] 上传成功")
+                    logger.info(f"[步骤A5] 解析响应...")
                     resp_json = {}
                     try:
                         resp_json = resp.json() if resp is not None else {}
-                    except Exception:
+                        logger.info(f"[步骤A5成功] 响应JSON: {json.dumps(resp_json, ensure_ascii=False)[:500]}")
+                    except Exception as e:
+                        logger.error(f"[步骤A5失败] 解析JSON失败: {str(e)}")
+                        logger.error(f"响应文本: {resp.text[:500]}")
                         resp_json = {}
+                    
                     external_file_id = resp_json.get("id") or (resp_json.get("data", {}) if isinstance(resp_json.get("data"), dict) else {}).get("id")
                     if not external_file_id:
+                        logger.error("=" * 80)
+                        logger.error(f"[步骤A6失败] 外部API上传成功但未返回文件ID")
+                        logger.error(f"响应内容: {json.dumps(resp_json, ensure_ascii=False)}")
+                        logger.error("=" * 80)
                         _dbg_log("pre-run", "H7", "dify_service.py:_call_dify_api", "auto upload response missing id", {
                             "fileId": str(file.id),
                         })
@@ -247,18 +334,26 @@ class SyntaxService:
                             "error_code": "EXTERNAL_UPLOAD_BAD_RESPONSE",
                             "error_message": "外部API上传成功但未返回文件ID"
                         }
+                    
+                    logger.info(f"[步骤A6成功] 获取到external_file_id: {external_file_id}")
+                    logger.info(f"[步骤A7] 回填到数据库...")
                     # 回填到数据库
                     file.external_file_id = str(external_file_id)
                     self.session.add(file)
                     self.session.commit()
                     self.session.refresh(file)
-                    logger.info(f"已自动上传到外部API并回填external_file_id: {file.external_file_id}")
+                    logger.info(f"[步骤A7成功] 已自动上传到外部API并回填external_file_id: {file.external_file_id}")
+                    logger.info("=" * 80)
                     _dbg_log("pre-run", "H7", "dify_service.py:_call_dify_api", "auto upload success", {
                         "fileId": str(file.id),
                         "externalFileId": str(external_file_id),
                     })
                 except Exception as e:
-                    logger.error(f"自动上传外部API异常: {str(e)}", exc_info=True)
+                    logger.error("=" * 80)
+                    logger.error(f"[步骤A异常] 自动上传外部API时发生异常")
+                    logger.error(f"异常类型: {type(e).__name__}")
+                    logger.error(f"异常消息: {str(e)}")
+                    logger.error("=" * 80, exc_info=True)
                     _dbg_log("pre-run", "H7", "dify_service.py:_call_dify_api", "auto upload exception", {
                         "fileId": str(file.id),
                         "error": str(e),
@@ -290,18 +385,93 @@ class SyntaxService:
             user_id = f"user_{task.operator_id}"
             logger.info(f"用户ID: {user_id}")
             
+            # 获取 output_schema 的 schema_definition（如果存在）
+            schema_definition = None
+            if task.params and task.params.get("output_schema_id"):
+                schema_id = task.params.get("output_schema_id")
+                try:
+                    schema = self.session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
+                    if schema and schema.schema_definition:
+                        schema_definition = schema.schema_definition
+                        logger.info(f"获取到 Schema ID: {schema_id}")
+                        logger.info(f"Schema 名称: {schema.name}")
+                        logger.info(f"Schema 定义字段数: {len(schema.schema_definition) if isinstance(schema.schema_definition, dict) else 'N/A'}")
+                except Exception as e:
+                    logger.warning(f"获取 Schema 定义失败: {str(e)}，将继续使用默认参数")
+            
             # 构建请求报文（使用external_file_id作为upload_file_id）
+            logger.info("=" * 80)
+            logger.info("[步骤C] 构建识别API请求")
+            logger.info(f"[步骤C1] 检查external_file_id: {file.external_file_id}")
+            
+            if not file.external_file_id:
+                logger.error("[步骤C1失败] external_file_id为空，无法调用识别API")
+                return {
+                    "success": False,
+                    "error_code": "FILE_ID_ERROR",
+                    "error_message": "文件缺少external_file_id，请使用模型配置上传"
+                }
+            
             endpoint_clean = endpoint.rstrip('/')
             url = f"{endpoint_clean}/workflows/run"
+            logger.info(f"[步骤C2] API URL: {url}")
+            
+            # 构建 inputs，包含文件信息和 schema_definition
+            inputs = {
+                "InvoiceFile": {
+                    "transfer_method": "local_file",
+                    "type": file_type_value,
+                    "upload_file_id": file.external_file_id  # 使用invoice_file表中的external_file_id
+                }
+            }
+            logger.info(f"[步骤C3] 构建inputs，文件类型: {file_type_value}, external_file_id: {file.external_file_id}")
+            
+            # 获取模板提示词（如果任务关联了模板）
+            template_prompt = None
+            if task.template_id:
+                try:
+                    from app.models.models_invoice import Template
+                    template = self.session.get(Template, task.template_id)
+                    if template and template.prompt:
+                        template_prompt = template.prompt
+                        logger.info(f"[步骤C3.1] 获取到模板提示词，模板ID: {task.template_id}, 提示词长度: {len(template_prompt)}")
+                    else:
+                        logger.info(f"[步骤C3.1] 模板不存在或未设置提示词，模板ID: {task.template_id}")
+                except Exception as e:
+                    logger.warning(f"[步骤C3.1] 获取模板提示词失败: {str(e)}，将继续执行")
+            
+            # 如果存在模板提示词，添加到 inputs 中
+            if template_prompt:
+                inputs["Input_Pro"] = template_prompt
+                logger.info(f"[步骤C3.2] 已将模板提示词添加到请求 inputs 中，字段名: Input_Pro")
+            
+            # 如果存在 schema_definition，添加到 inputs 中
+            # 根据模型配置名称判断使用哪个字段名
+            config_name_lower = model_config.name.lower() if model_config.name else ""
+            schema_field_name = "JsonSchema" if "jsonschema" in config_name_lower else "OutputSchema"
+            
+            if schema_definition:
+                # 如果字段名是JsonSchema，需要将schema转换为JSON字符串
+                if schema_field_name == "JsonSchema":
+                    if isinstance(schema_definition, dict):
+                        schema_value = json.dumps(schema_definition, ensure_ascii=False)
+                    elif isinstance(schema_definition, str):
+                        schema_value = schema_definition
+                    else:
+                        schema_value = json.dumps(schema_definition, ensure_ascii=False)
+                    inputs[schema_field_name] = schema_value
+                    logger.info(f"[步骤C4] 已将 schema_definition 添加到请求 inputs 中，字段名: {schema_field_name} (字符串格式)")
+                else:
+                    inputs[schema_field_name] = schema_definition
+                    logger.info(f"[步骤C4] 已将 schema_definition 添加到请求 inputs 中，字段名: {schema_field_name}")
+            else:
+                logger.info(f"[步骤C4] 未提供 schema_definition，使用默认参数")
+                # 如果配置名称包含JsonSchema但未提供schema，记录警告
+                if "jsonschema" in config_name_lower:
+                    logger.warning(f"[步骤C4警告] 配置 {model_config.name} 可能需要 JsonSchema，但未提供")
             
             payload = {
-                "inputs": {
-                    "InvoiceFile": {
-                        "transfer_method": "local_file",
-                        "type": file_type_value,
-                        "upload_file_id": file.external_file_id  # 使用invoice_file表中的external_file_id
-                    }
-                },
+                "inputs": inputs,
                 "response_mode": "blocking",
                 "user": user_id
             }
@@ -313,19 +483,30 @@ class SyntaxService:
             
             logger.info("=" * 80)
             logger.info("=== 调用SYNTAX API ===")
-            logger.info(f"URL: {url}")
-            logger.info(f"请求头: {json.dumps({k: ('***' if k.lower() == 'authorization' else v) for k, v in headers.items()}, ensure_ascii=False)}")
-            logger.info(f"请求报文: {json.dumps(payload, ensure_ascii=False, indent=2)}")
-            logger.info(f"使用的external_file_id: {file.external_file_id}")
+            logger.info(f"[步骤C5] 完整请求信息:")
+            logger.info(f"  URL: {url}")
+            logger.info(f"  请求头: {json.dumps({k: ('***' if k.lower() == 'authorization' else v) for k, v in headers.items()}, ensure_ascii=False)}")
+            logger.info(f"  请求报文: {json.dumps(payload, ensure_ascii=False, indent=2)}")
+            logger.info(f"  使用的external_file_id: {file.external_file_id}")
+            logger.info(f"  用户ID: {user_id}")
+            logger.info(f"  响应模式: blocking")
             logger.info("=" * 80)
             
             # 发送请求
+            logger.info("=" * 80)
+            logger.info("[步骤B] 准备调用识别API")
+            logger.info(f"[步骤B1] URL: {url}")
+            logger.info(f"[步骤B1] 请求模式: blocking (同步)")
+            logger.info(f"[步骤B1] 超时设置: 300秒 (5分钟)")
+            logger.info("=" * 80)
+            
             start_time = datetime.now()
+            logger.info(f"[步骤B2] 开始发送HTTP请求... 时间: {start_time.strftime('%H:%M:%S.%f')[:-3]}")
             try:
                 with httpx.Client(timeout=300.0) as client:  # 5分钟超时
-                    logger.info("开始发送HTTP请求...")
                     response = client.post(url, json=payload, headers=headers)
                     elapsed_time = (datetime.now() - start_time).total_seconds()
+                    logger.info(f"[步骤B2完成] HTTP请求完成，耗时: {elapsed_time:.2f} 秒")
                     
                     logger.info("=" * 80)
                     logger.info("=== SYNTAX API 响应 ===")
@@ -429,10 +610,30 @@ class SyntaxService:
                                 logger.info(f"消息: {result['message']}")
                             if "status" in result:
                                 logger.info(f"状态: {result['status']}")
-                            # 如果工作流返回非成功状态，也记录到debug log
+                            
+                            # 检查data字段中的status（DIFY工作流响应格式）
+                            data_status = None
+                            if "data" in result and isinstance(result["data"], dict):
+                                data_status = result["data"].get("status")
+                                if data_status:
+                                    logger.info(f"data.status: {data_status}")
+                            
+                            # 如果工作流返回非成功状态，记录错误并返回失败
                             try:
-                                status_val = result.get("status")
+                                status_val = result.get("status") or data_status
                                 if status_val and status_val not in ("succeeded", "success", "completed"):
+                                    error_msg = None
+                                    if "data" in result and isinstance(result["data"], dict):
+                                        error_msg = result["data"].get("error")
+                                    if not error_msg:
+                                        error_msg = result.get("error") or result.get("message")
+                                    
+                                    logger.error("=" * 80)
+                                    logger.error("=== DIFY工作流执行失败 ===")
+                                    logger.error(f"状态: {status_val}")
+                                    logger.error(f"错误信息: {error_msg}")
+                                    logger.error("=" * 80)
+                                    
                                     # #region agent log
                                     _dbg_log("pre-run", "H9", "dify_service.py:_call_dify_api", "workflows/run non-success status", {
                                         "taskId": str(task.id),
@@ -440,10 +641,18 @@ class SyntaxService:
                                         "externalFileId": file.external_file_id,
                                         "status": status_val,
                                         "message": (result.get("message") or "")[:300],
-                                        "error": (str(result.get("error")) if result.get("error") is not None else "")[:300],
+                                        "error": (str(error_msg) if error_msg else "")[:300],
                                     })
                                     # #endregion
-                            except Exception:
+                                    
+                                    # 返回失败结果
+                                    return {
+                                        "success": False,
+                                        "error_code": "DIFY_WORKFLOW_FAILED",
+                                        "error_message": f"DIFY工作流执行失败: {status_val}. {error_msg[:200] if error_msg else ''}"
+                                    }
+                            except Exception as e:
+                                logger.warning(f"检查状态时出错: {str(e)}")
                                 pass
                     except json.JSONDecodeError as e:
                         logger.warning(f"响应不是有效的JSON格式: {str(e)}")

@@ -19,6 +19,7 @@ class UserBase(SQLModel):
 # Properties to receive via API on creation
 class UserCreate(UserBase):
     password: str = Field(min_length=8, max_length=40)
+    company_id: uuid.UUID | None = Field(default=None, description="公司ID")
 
 
 class UserRegister(SQLModel):
@@ -31,6 +32,7 @@ class UserRegister(SQLModel):
 class UserUpdate(UserBase):
     email: EmailStr | None = Field(default=None, max_length=255)  # type: ignore
     password: str | None = Field(default=None, min_length=8, max_length=40)
+    company_id: uuid.UUID | None = Field(default=None, description="公司ID")
 
 
 class UserUpdateMe(SQLModel):
@@ -56,6 +58,7 @@ class User(UserBase, table=True):
 # Properties to return via API, id is always required
 class UserPublic(UserBase):
     id: uuid.UUID
+    company_id: uuid.UUID | None = Field(default=None, description="公司ID")
 
 
 class UsersPublic(SQLModel):

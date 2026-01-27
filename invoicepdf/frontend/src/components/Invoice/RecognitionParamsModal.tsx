@@ -74,8 +74,15 @@ interface ConfigOptions {
   templates: Array<{
     id: string
     name: string
-    type: string
-    version: string
+    template_type: string
+    type?: string  // 保持向后兼容
+    description?: string
+    status: string
+    schema_id?: string
+    default_schema_id?: string
+    current_version?: string
+    version?: string  // 保持向后兼容
+    accuracy?: number
   }>
   defaults: {
     language: string
@@ -311,7 +318,19 @@ const RecognitionParamsModal = ({
                 <Field label="选择模板">
                   <select
                     value={params.template_id || ""}
-                    onChange={(e) => setParams(prev => ({ ...prev, template_id: e.target.value }))}
+                    onChange={(e) => {
+                      const templateId = e.target.value
+                      const selectedTemplate = configOptions?.templates.find(t => t.id === templateId)
+                      
+                      setParams(prev => {
+                        const newParams = { ...prev, template_id: templateId }
+                        // 如果模板有对应的 schema，自动设置 output_schema_id
+                        if (selectedTemplate?.default_schema_id) {
+                          newParams.output_schema_id = selectedTemplate.default_schema_id
+                        }
+                        return newParams
+                      })
+                    }}
                     style={{
                       width: '100%',
                       padding: '8px 12px',
@@ -322,12 +341,40 @@ const RecognitionParamsModal = ({
                     }}
                   >
                     <option value="">请选择模板</option>
-                    {configOptions.templates.map((template) => (
-                      <option key={template.id} value={template.id}>
-                        {template.name} ({template.type}) - v{template.version}
-                      </option>
-                    ))}
+                    {configOptions.templates.map((template) => {
+                      const templateType = template.template_type || template.type || ''
+                      const version = template.current_version || template.version || ''
+                      return (
+                        <option key={template.id} value={template.id}>
+                          {template.name} ({templateType}){version ? ` - v${version}` : ''}
+                        </option>
+                      )
+                    })}
                   </select>
+                  {/* 显示选中模板的详细信息 */}
+                  {params.template_id && (() => {
+                    const selectedTemplate = configOptions?.templates.find(t => t.id === params.template_id)
+                    if (!selectedTemplate) return null
+                    return (
+                      <Box mt={2} p={3} bg="gray.50" borderRadius="md" fontSize="sm">
+                        {selectedTemplate.description && (
+                          <Text mb={1}><strong>描述：</strong>{selectedTemplate.description}</Text>
+                        )}
+                        <Text mb={1}><strong>类型：</strong>{selectedTemplate.template_type || selectedTemplate.type}</Text>
+                        {(selectedTemplate.current_version || selectedTemplate.version) && (
+                          <Text mb={1}><strong>版本：</strong>{selectedTemplate.current_version || selectedTemplate.version}</Text>
+                        )}
+                        {selectedTemplate.accuracy !== null && selectedTemplate.accuracy !== undefined && (
+                          <Text mb={1}><strong>准确率：</strong>{(selectedTemplate.accuracy * 100).toFixed(1)}%</Text>
+                        )}
+                        {selectedTemplate.default_schema_id && (
+                          <Text color="green.600" fontWeight="medium">
+                            ✓ 已自动关联输出字段标准
+                          </Text>
+                        )}
+                      </Box>
+                    )
+                  })()}
                 </Field>
               )}
 

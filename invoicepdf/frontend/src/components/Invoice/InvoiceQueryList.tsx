@@ -44,6 +44,7 @@ interface InvoiceRecord {
   supplier: string | null
   buyer: string | null
   status: string
+  companyCode: string | null
   recognitionStatus: string
   reviewStatus: string
   createTime: string
@@ -331,7 +332,8 @@ const InvoiceQueryList = ({ reviewStatus, title }: InvoiceQueryListProps = {}) =
     return tableData.filter(item =>
       item.invoiceNo.toLowerCase().includes(keyword) ||
       (item.supplier && item.supplier.toLowerCase().includes(keyword)) ||
-      (item.buyer && item.buyer.toLowerCase().includes(keyword))
+      (item.buyer && item.buyer.toLowerCase().includes(keyword)) ||
+      (item.companyCode && item.companyCode.toLowerCase().includes(keyword))
     )
   }, [tableData, searchKeyword])
 

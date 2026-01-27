@@ -348,7 +348,8 @@ const InvoiceReviewPending = () => {
     const keyword = searchKeyword.toLowerCase()
     return tableData.filter(item =>
       item.invoiceNo.toLowerCase().includes(keyword) ||
-      (item.supplier && item.supplier.toLowerCase().includes(keyword))
+      (item.supplier && item.supplier.toLowerCase().includes(keyword)) ||
+      (item.companyCode && item.companyCode.toLowerCase().includes(keyword))
     )
   }, [tableData, searchKeyword])
 

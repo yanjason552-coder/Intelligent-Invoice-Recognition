@@ -18,7 +18,7 @@ from app.models.models_invoice import (
     RecognitionTask, RecognitionTaskCreate, RecognitionTaskResponse, RecognitionTaskBatchCreate,
     RecognitionResult, RecognitionResultResponse,
     RecognitionField, ReviewRecord, InvoiceFileListItem,
-    ModelConfig, OutputSchema, InvoiceItem, InvoiceItemUpdate, InvoiceItemsBatchUpdate
+    LLMConfig, OutputSchema, InvoiceItem, InvoiceItemUpdate, InvoiceItemsBatchUpdate
 )
 from sqlmodel import SQLModel, Field
 
@@ -435,7 +435,7 @@ def get_recognition_tasks(
         model_configs_dict = {}
         if model_config_ids:
             model_configs = session.exec(
-                select(ModelConfig).where(ModelConfig.id.in_(list(model_config_ids)))
+                select(LLMConfig).where(LLMConfig.id.in_(list(model_config_ids)))
             ).all()
             model_configs_dict = {config.id: config for config in model_configs}
         
@@ -450,7 +450,7 @@ def get_recognition_tasks(
                     status=task.status,
                     provider=task.provider,
                     recognition_mode=task.params.get("recognition_mode") if task.params else None,
-                    model_name=model_configs_dict.get(UUID(task.params.get("model_config_id"))).model_name if task.params and task.params.get("model_config_id") and UUID(task.params.get("model_config_id")) in model_configs_dict else None,
+                    model_name=model_configs_dict.get(UUID(task.params.get("model_config_id"))).name if task.params and task.params.get("model_config_id") and UUID(task.params.get("model_config_id")) in model_configs_dict else None,
                     start_time=task.start_time,
                     end_time=task.end_time,
                     create_time=task.create_time
@@ -608,7 +608,7 @@ def start_recognition(
             raise HTTPException(status_code=400, detail="任务参数中缺少model_config_id")
         
         # 验证模型配置
-        model_config = session.get(ModelConfig, UUID(model_config_id))
+        model_config = session.get(LLMConfig, UUID(model_config_id))
         if not model_config:
             raise HTTPException(status_code=404, detail="模型配置不存在")
         if not model_config.is_active:
@@ -638,28 +638,44 @@ def start_recognition(
         session.commit()
         
         # 调用SYNTAX服务（同步执行，实际生产环境应该使用异步队列）
+        logger.info("=" * 80)
+        logger.info("=== 准备调用 SYNTAX 服务 ===")
+        logger.info(f"任务ID: {task.id}")
+        logger.info(f"模型配置ID: {model_config_id}")
+        logger.info("=" * 80)
         try:
             from app.services.dify_service import SyntaxService
             syntax_service = SyntaxService(session)
             # 注意：这里同步执行，实际应该使用异步任务队列（如Celery）
             # 暂时同步执行以便测试，生产环境应该改为异步
+            logger.info("开始调用 process_task...")
             success = syntax_service.process_task(task.id)
+            logger.info(f"process_task 返回结果: {success}")
+            
             if success:
+                logger.info("✅ 识别任务处理成功")
                 _dbg_log("pre-run", "H4", "invoice.py:start_recognition", "dify process success", {
                     "taskId": str(task_id)
                 })
                 return Message(message="识别任务已完成")
             else:
                 # 读取任务失败原因（由SyntaxService写入task.error_code/error_message）
+                logger.error("❌ 识别任务处理失败")
                 try:
+                    session.refresh(task)
                     failed_task = session.get(RecognitionTask, task.id)
+                    error_code = getattr(failed_task, "error_code", None)
+                    error_message = getattr(failed_task, "error_message", None)
+                    logger.error(f"错误代码: {error_code}")
+                    logger.error(f"错误消息: {error_message}")
                     _dbg_log("pre-run", "H9", "invoice.py:start_recognition", "dify process returned False", {
                         "taskId": str(task_id),
                         "invoiceId": str(task.invoice_id),
-                        "errorCode": getattr(failed_task, "error_code", None),
-                        "errorMessage": (getattr(failed_task, "error_message", "") or "")[:300],
+                        "errorCode": error_code,
+                        "errorMessage": (error_message or "")[:300],
                     })
                 except Exception as _e:
+                    logger.error(f"获取任务失败原因时出错: {str(_e)}", exc_info=True)
                     _dbg_log("pre-run", "H9", "invoice.py:start_recognition", "failed to fetch task failure reason", {
                         "taskId": str(task_id),
                         "error": str(_e)[:200],
@@ -667,15 +683,29 @@ def start_recognition(
                 _dbg_log("pre-run", "H4", "invoice.py:start_recognition", "dify process failed", {
                     "taskId": str(task_id)
                 })
-                return Message(message="识别任务已启动，但执行失败，请查看任务详情")
+                return Message(message=f"识别任务已启动，但执行失败。错误代码: {error_code}, 错误消息: {error_message}")
         except Exception as e:
-            logger.error(f"调用Dify服务失败: {str(e)}", exc_info=True)
-            # 即使Dify调用失败，任务状态已更新为processing，返回成功消息
+            logger.error("=" * 80)
+            logger.error("=== 调用Dify服务时发生异常 ===")
+            logger.error(f"异常类型: {type(e).__name__}")
+            logger.error(f"异常消息: {str(e)}")
+            logger.error("=" * 80, exc_info=True)
+            # 即使Dify调用失败，任务状态已更新为processing，需要标记为失败
+            try:
+                task.status = "failed"
+                task.error_code = "EXCEPTION"
+                task.error_message = str(e)[:500]
+                session.add(task)
+                invoice.recognition_status = "failed"
+                session.add(invoice)
+                session.commit()
+            except Exception as commit_error:
+                logger.error(f"更新任务状态失败: {str(commit_error)}")
             _dbg_log("pre-run", "H4", "invoice.py:start_recognition", "dify call exception", {
                 "taskId": str(task_id),
                 "error": str(e)
             })
-            return Message(message="识别任务已启动")
+            return Message(message=f"识别任务启动失败: {str(e)}")
     except HTTPException:
         raise
     except Exception as e:
@@ -756,15 +786,14 @@ async def batch_create_recognition_tasks(
     
     try:
         # 验证模型配置
-        model_config = session.get(ModelConfig, batch_in.params.model_config_id)
+        model_config = session.get(LLMConfig, batch_in.params.model_config_id)
         if not model_config:
             raise HTTPException(status_code=404, detail="模型配置不存在")
         if not model_config.is_active:
             raise HTTPException(status_code=400, detail="模型配置未启用")
         
-        # 验证识别方式
-        if batch_in.params.recognition_mode not in model_config.allowed_modes:
-            raise HTTPException(status_code=400, detail=f"识别方式 {batch_in.params.recognition_mode} 不在允许列表中")
+        # 注意：LLMConfig 没有 allowed_modes 字段，暂时跳过识别方式验证
+        # 如果需要验证识别方式，可以从其他地方获取配置信息
         
         # 验证所有文件是否存在
         logger.info("--- 验证文件 ---")

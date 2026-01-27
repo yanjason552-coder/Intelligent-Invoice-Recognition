@@ -8,7 +8,7 @@ import logging
 
 from app.api.deps import SessionDep, CurrentUser
 from app.models import Message
-from app.models.models_invoice import OCRConfig, LLMConfig, RecognitionRule, ModelConfig, OutputSchema, Template, TemplateVersion
+from app.models.models_invoice import OCRConfig, LLMConfig, RecognitionRule, OutputSchema, Template, TemplateVersion
 from sqlalchemy import JSON
 
 logger = logging.getLogger(__name__)
@@ -166,107 +166,7 @@ def update_llm_config(
             session.flush()  # 获取新创建的ID
             llm_config_obj = new_config
         
-        # 同步创建或更新 model_config
-        try:
-            # 优先根据 ID 查找（如果是更新操作，使用共享的 ID）
-            existing_model_config = None
-            if shared_id:
-                existing_model_config = session.get(ModelConfig, shared_id)
-            
-            # 如果根据 ID 没找到，再根据名称查找
-            if not existing_model_config:
-                existing_model_config = session.exec(
-                    select(ModelConfig).where(ModelConfig.name == config["name"])
-                ).first()
-            
-            # 根据 app_type 设置 allowed_modes
-            allowed_modes = ["llm_extract", "ocr_llm", "template"]
-            if app_type == "chat":
-                # 对话型应用主要使用 llm_extract
-                allowed_modes = ["llm_extract", "ocr_llm"]
-            elif app_type == "workflow":
-                # 工作流应用可以使用所有方式
-                allowed_modes = ["llm_extract", "ocr_llm", "template"]
-            elif app_type == "completion":
-                # 补全型应用主要使用 llm_extract
-                allowed_modes = ["llm_extract"]
-            
-            # 从配置名称中提取模型名称，如果没有则使用默认值
-            model_name = config["name"]
-            if len(model_name) > 100:
-                # 如果名称太长，截取前100个字符（model_name 字段最大长度）
-                model_name = model_name[:100]
-            
-            logger.info(f"准备同步 model_config，名称: {config['name']}, 是否存在: {existing_model_config is not None}")
-            
-            if existing_model_config:
-                # 更新现有的 model_config
-                existing_model_config.syntax_endpoint = endpoint
-                existing_model_config.syntax_api_key = config["api_key"]
-                existing_model_config.syntax_app_id = config.get("app_id")
-                existing_model_config.syntax_workflow_id = config.get("workflow_id")
-                # 同时更新兼容字段（dify_*）
-                existing_model_config.dify_endpoint = endpoint
-                existing_model_config.dify_api_key = config["api_key"]
-                existing_model_config.dify_app_id = config.get("app_id")
-                existing_model_config.dify_workflow_id = config.get("workflow_id")
-                existing_model_config.is_active = config.get("is_active", True)
-                existing_model_config.description = config.get("description")
-                existing_model_config.update_time = datetime.now()
-                # 更新模型信息（如果名称改变）
-                if existing_model_config.model_name != model_name:
-                    existing_model_config.model_name = model_name
-                # 更新 allowed_modes
-                existing_model_config.allowed_modes = allowed_modes
-                session.add(existing_model_config)
-                logger.info(f"更新 model_config: {existing_model_config.name} (ID: {existing_model_config.id})")
-            else:
-                # 创建新的 model_config，使用与 llm_config 相同的 ID
-                new_model_config = ModelConfig(
-                    id=shared_id,  # 使用与 llm_config 相同的 ID
-                    name=config["name"],
-                    provider="syntax",
-                    syntax_endpoint=endpoint,
-                    syntax_api_key=config["api_key"],
-                    syntax_app_id=config.get("app_id"),
-                    syntax_workflow_id=config.get("workflow_id"),
-                    # 同时设置兼容字段（dify_*）
-                    dify_endpoint=endpoint,
-                    dify_api_key=config["api_key"],
-                    dify_app_id=config.get("app_id"),
-                    dify_workflow_id=config.get("workflow_id"),
-                    model_name=model_name,
-                    model_version=None,
-                    cost_level="standard",
-                    default_mode="llm_extract",
-                    allowed_modes=allowed_modes,
-                    is_active=config.get("is_active", True),
-                    description=config.get("description"),
-                    creator_id=current_user.id
-                )
-                session.add(new_model_config)
-                session.flush()  # 确保获取ID
-                logger.info(f"创建 model_config: {new_model_config.name} (ID: {new_model_config.id}, 与 llm_config ID 一致)")
-        except Exception as e:
-            # 如果同步 model_config 失败，记录详细错误信息
-            import traceback
-            error_detail = traceback.format_exc()
-            logger.error(f"同步 model_config 失败: {str(e)}\n{error_detail}")
-            # 仍然继续执行，不中断主流程
-        
         session.commit()
-        
-        # 验证 model_config 是否创建成功
-        try:
-            created_model_config = session.exec(
-                select(ModelConfig).where(ModelConfig.name == config["name"])
-            ).first()
-            if created_model_config:
-                logger.info(f"验证成功: model_config 已创建/更新，ID: {created_model_config.id}")
-            else:
-                logger.warning(f"警告: model_config 未找到，名称: {config['name']}")
-        except Exception as e:
-            logger.warning(f"验证 model_config 时出错: {str(e)}")
         
         return Message(message="大模型配置保存成功")
     except HTTPException:
@@ -762,28 +662,41 @@ def get_recognition_config_options(
     返回：模型配置列表、识别方式列表、输出结构标准列表、模板策略列表等
     """
     try:
-        # 1. 获取模型配置列表（根据权限过滤）
-        model_configs_query = select(ModelConfig).where(ModelConfig.is_active == True)
-        model_configs = session.exec(model_configs_query).all()
+        # 1. 获取模型配置列表（从 llm_config 表查询）
+        llm_configs_query = select(LLMConfig).where(LLMConfig.is_active == True)
+        llm_configs = session.exec(llm_configs_query).all()
         
-        # 权限过滤：检查用户是否有权限使用该模型
+        # 转换为模型配置格式
         available_model_configs = []
-        for config in model_configs:
-            # 如果配置了用户限制，检查当前用户是否在允许列表中
-            if config.allowed_user_ids:
-                if current_user.id not in [UUID(uid) for uid in config.allowed_user_ids]:
-                    continue
-            # TODO: 检查角色权限（需要获取用户角色）
+        for config in llm_configs:
+            # 根据 app_type 设置 allowed_modes
+            allowed_modes = ["llm_extract", "ocr_llm", "template"]
+            if config.app_type == "chat":
+                allowed_modes = ["llm_extract", "ocr_llm"]
+            elif config.app_type == "workflow":
+                allowed_modes = ["llm_extract", "ocr_llm", "template"]
+            elif config.app_type == "completion":
+                allowed_modes = ["llm_extract"]
+            
+            # 设置默认识别方式
+            default_mode = "llm_extract"
+            if config.app_type == "chat":
+                default_mode = "llm_extract"
+            elif config.app_type == "workflow":
+                default_mode = "llm_extract"
+            elif config.app_type == "completion":
+                default_mode = "llm_extract"
+            
             available_model_configs.append({
                 "id": str(config.id),
                 "name": config.name,
-                "provider": config.provider,
-                "cost_level": config.cost_level,
-                "default_mode": config.default_mode,
-                "allowed_modes": config.allowed_modes or [],
-                "model_name": config.model_name,
-                "model_version": config.model_version,
-                "default_schema_id": str(config.default_schema_id) if config.default_schema_id else None
+                "provider": "syntax",  # llm_config 默认使用 syntax
+                "cost_level": "standard",  # 默认标准成本级别
+                "default_mode": default_mode,
+                "allowed_modes": allowed_modes,
+                "model_name": config.name,  # 使用配置名称作为模型名称
+                "model_version": None,  # llm_config 没有版本字段
+                "default_schema_id": None  # llm_config 没有 default_schema_id 字段
             })
         
         # 2. 获取识别方式列表（从模型配置中提取所有唯一的方式）
@@ -843,9 +756,15 @@ def get_recognition_config_options(
                 {
                     "id": str(t.id),
                     "name": t.name,
-                    "type": t.template_type,
-                    # 前端会展示为：v{template.version}，这里返回不带前缀 v 的版本号
-                    "version": _strip_leading_v(v.version) if v else "",
+                    "template_type": t.template_type,
+                    "type": t.template_type,  # 保持向后兼容
+                    "description": t.description,
+                    "status": t.status,
+                    "schema_id": str(t.default_schema_id) if t.default_schema_id else None,
+                    "default_schema_id": str(t.default_schema_id) if t.default_schema_id else None,
+                    "current_version": v.version if v else None,
+                    "version": _strip_leading_v(v.version) if v else "",  # 保持向后兼容
+                    "accuracy": t.accuracy,
                 }
             )
         
@@ -864,3 +783,68 @@ def get_recognition_config_options(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取配置选项失败: {str(e)}")
+
+
+@router.delete("/schemas/{schema_id}", response_model=Message)
+def delete_schema(
+    *,
+    session: SessionDep,
+    schema_id: UUID,
+    current_user: CurrentUser
+) -> Any:
+    """
+    删除Schema配置
+    """
+    try:
+        from sqlalchemy import text
+        
+        # 先使用SQL查询获取Schema名称（避免SQLModel关系加载）
+        get_schema_sql = text("SELECT name FROM output_schema WHERE id = :schema_id")
+        result = session.execute(get_schema_sql, {"schema_id": str(schema_id)}).first()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="Schema不存在")
+        
+        schema_name = result[0]
+        
+        # 先尝试删除关联的验证记录（如果表存在）
+        # 使用原始SQL避免SQLModel关系加载问题
+        try:
+            # 检查表是否存在，如果存在则删除关联记录
+            delete_validation_records = text("""
+                DELETE FROM schema_validation_record 
+                WHERE schema_id = :schema_id
+            """)
+            session.execute(delete_validation_records, {"schema_id": str(schema_id)})
+            logger.info(f"已删除Schema {schema_id} 的验证记录")
+        except Exception as e:
+            # 如果表不存在或删除失败，需要回滚事务并重新开始
+            error_msg = str(e)
+            if "does not exist" in error_msg or "relation" in error_msg.lower() or "aborted" in error_msg.lower():
+                logger.info(f"schema_validation_record表不存在，回滚事务后继续删除Schema")
+                session.rollback()
+                # 重新获取Schema名称（因为事务已回滚）
+                result = session.execute(get_schema_sql, {"schema_id": str(schema_id)}).first()
+                if not result:
+                    raise HTTPException(status_code=404, detail="Schema不存在")
+                schema_name = result[0]
+            else:
+                logger.warning(f"删除验证记录时出错: {error_msg}")
+                session.rollback()
+                raise HTTPException(status_code=500, detail=f"删除Schema失败: {error_msg}")
+
+        # 使用SQL直接删除Schema，避免SQLModel关系加载问题
+        delete_schema_sql = text("DELETE FROM output_schema WHERE id = :schema_id")
+        delete_result = session.execute(delete_schema_sql, {"schema_id": str(schema_id)})
+        session.commit()
+        
+        if delete_result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Schema不存在")
+
+        return Message(message=f"Schema '{schema_name}' 删除成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logger.error(f"删除Schema失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"删除Schema失败: {str(e)}")

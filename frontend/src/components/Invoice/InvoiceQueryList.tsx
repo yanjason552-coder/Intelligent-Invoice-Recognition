@@ -29,6 +29,7 @@ interface InvoiceRecord {
   reviewStatus: string
   createTime: string
   updateTime: string
+  companyCode: string | null
 }
 
 interface InvoiceQueryListProps {
@@ -102,7 +103,8 @@ const InvoiceQueryList = ({ reviewStatus, title }: InvoiceQueryListProps = {}) =
           recognitionStatus: item.recognition_status || 'pending',
           reviewStatus: item.review_status || 'pending',
           createTime: item.create_time ? new Date(item.create_time).toLocaleString('zh-CN') : '',
-          updateTime: item.update_time ? new Date(item.update_time).toLocaleString('zh-CN') : ''
+          updateTime: item.update_time ? new Date(item.update_time).toLocaleString('zh-CN') : '',
+          companyCode: item.company_code || null
         }))
         
         setTableData(transformedData)
@@ -222,6 +224,7 @@ const InvoiceQueryList = ({ reviewStatus, title }: InvoiceQueryListProps = {}) =
       field: 'invoiceNo',
       width: 150
     },
+    { headerName: '公司代码', field: 'companyCode', width: 120 },
     { headerName: '票据类型', field: 'invoiceType', width: 150 },
     { headerName: '开票日期', field: 'invoiceDate', width: 120 },
     {
@@ -284,7 +287,8 @@ const InvoiceQueryList = ({ reviewStatus, title }: InvoiceQueryListProps = {}) =
     return tableData.filter(item =>
       item.invoiceNo.toLowerCase().includes(keyword) ||
       (item.supplier && item.supplier.toLowerCase().includes(keyword)) ||
-      (item.buyer && item.buyer.toLowerCase().includes(keyword))
+      (item.buyer && item.buyer.toLowerCase().includes(keyword)) ||
+      (item.companyCode && item.companyCode.toLowerCase().includes(keyword))
     )
   }, [tableData, searchKeyword])
 

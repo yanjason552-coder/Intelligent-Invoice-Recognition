@@ -24,6 +24,7 @@ interface RecognitionTask {
   templateName: string
   recognitionTime: string
   operator: string
+  companyCode: string | null
 }
 
 const InvoiceRecognitionList = () => {
@@ -89,7 +90,8 @@ const InvoiceRecognitionList = () => {
           status: item.recognition_status || 'pending',
           templateName: item.template_name || '未匹配',
           recognitionTime: item.recognition_time ? new Date(item.recognition_time).toLocaleString('zh-CN') : '-',
-          operator: item.uploader_name || item.creator_name || '-'
+          operator: item.uploader_name || item.creator_name || '-',
+          companyCode: item.company_code || null
         }))
           // 过滤掉识别已完成的数据
           .filter((item: RecognitionTask) => item.status !== 'completed')
@@ -352,6 +354,7 @@ const InvoiceRecognitionList = () => {
       // checkboxSelection: true,
       headerCheckboxSelection: true
     },
+    { headerName: '公司代码', field: 'companyCode', width: 120 },
     { headerName: '文件名', field: 'fileName', width: 200 },
     { headerName: '上传时间', field: 'uploadTime', width: 180 },
     {
@@ -396,7 +399,8 @@ const InvoiceRecognitionList = () => {
     const keyword = searchKeyword.toLowerCase()
     return tableData.filter(item =>
       item.invoiceNo.toLowerCase().includes(keyword) ||
-      item.fileName.toLowerCase().includes(keyword)
+      item.fileName.toLowerCase().includes(keyword) ||
+      (item.companyCode && item.companyCode.toLowerCase().includes(keyword))
     )
   }, [tableData, searchKeyword])
 

@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from requests import api
 
-from app.api.routes import items, login, login_debug, private, users, utils, unified, unified_v2, sales_order_doc_d, feature, feature_d, material_class, material, surfaceTechnology, inventory, material_density, operation, nesting_layout, production_order, invoice, config, health, roles, permissions, companies, statistics
+from app.api.routes import items, login, login_debug, private, users, utils, unified, unified_v2, sales_order_doc_d, feature, feature_d, material_class, material, surfaceTechnology, inventory, material_density, operation, nesting_layout, production_order, invoice, config, health, roles, permissions, companies, statistics, template
 from app.core.config import settings
 
 api_router = APIRouter()
@@ -29,6 +29,7 @@ api_router.include_router(roles.router)
 api_router.include_router(permissions.router)
 api_router.include_router(companies.router)
 api_router.include_router(statistics.router)
+api_router.include_router(template.router)
 
 
 if settings.ENVIRONMENT == "local":

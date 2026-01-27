@@ -19,6 +19,10 @@ interface Template {
   status: string
   current_version?: string
   accuracy?: number
+  schema_id?: string
+  schema_name?: string
+  schema_version?: string
+  matching_rules_count?: number
   create_time?: string
   update_time?: string
 }
@@ -85,8 +89,41 @@ const TemplateConfig = () => {
     {
       headerName: '描述',
       field: 'description',
-      width: 250,
+      width: 200,
       tooltipField: 'description',
+    },
+    {
+      headerName: '绑定 Schema',
+      field: 'schema_name',
+      width: 180,
+      cellRenderer: (params: any) => {
+        const schemaName = params.data?.schema_name
+        const schemaVersion = params.data?.schema_version
+        if (!schemaName) {
+          return <Text fontSize="sm" color="gray.500">未绑定</Text>
+        }
+        return (
+          <VStack spacing={0} align="start">
+            <Badge colorScheme="blue">{schemaName}</Badge>
+            {schemaVersion && (
+              <Text fontSize="xs" color="gray.500">v{schemaVersion}</Text>
+            )}
+          </VStack>
+        )
+      }
+    },
+    {
+      headerName: '匹配规则',
+      field: 'matching_rules_count',
+      width: 100,
+      cellRenderer: (params: any) => {
+        const count = params.data?.matching_rules_count || 0
+        return count > 0 ? (
+          <Badge colorScheme="green">{count} 条</Badge>
+        ) : (
+          <Text fontSize="sm" color="gray.500">-</Text>
+        )
+      }
     },
     {
       headerName: '状态',
@@ -318,10 +355,13 @@ const TemplateConfig = () => {
     setEditingTemplate(null)
     setShowEditModal(true)
     // 触发打开新建页面的自定义事件
-    const event = new CustomEvent('openTemplateEditTab', {
+    const event = new CustomEvent('openTab', {
       detail: {
-        templateId: null,
-        templateData: null
+        type: 'template-edit',
+        data: {
+          templateId: null,
+          templateData: null
+        }
       }
     })
     window.dispatchEvent(event)

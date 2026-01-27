@@ -1,6 +1,8 @@
 import uuid
 from typing import Optional
+from datetime import datetime
 from sqlmodel import Field, Relationship, SQLModel
+from sqlalchemy import Column, DateTime
 
 
 # ==================== 公司模型 ====================
@@ -40,6 +42,9 @@ class Company(CompanyBase, table=True):
     
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     
+    # 时间字段
+    create_time: datetime = Field(default_factory=datetime.now, sa_column=Column(DateTime), description="创建时间")
+    
     # 关联关系
     users: list["User"] = Relationship(back_populates="company")
 
@@ -47,6 +52,7 @@ class Company(CompanyBase, table=True):
 class CompanyPublic(CompanyBase):
     """公司公开响应模型"""
     id: uuid.UUID
+    create_time: datetime = Field(description="创建时间")
     user_count: Optional[int] = Field(default=None, description="关联用户数量")
 
 

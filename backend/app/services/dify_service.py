@@ -17,8 +17,11 @@ except ImportError:
 
 from app.models.models_invoice import (
     RecognitionTask, RecognitionResult, Invoice, InvoiceFile,
-    ModelConfig, OutputSchema, LLMConfig, InvoiceItem
+    OutputSchema, LLMConfig, InvoiceItem
 )
+from app.services.schema_validation_service import schema_validation_service
+from app.services.schema_mismatch_handler import schema_mismatch_handler
+from app.services.schema_monitoring_service import schema_monitoring_service
 
 # 配置日志 - 确保日志级别为INFO
 logging.basicConfig(
@@ -63,7 +66,7 @@ class SyntaxService:
                 self._mark_task_failed(task, "DIFY_BAD_PARAMS", "任务参数中缺少model_config_id")
                 return False
             
-            model_config = self.session.get(ModelConfig, UUID(model_config_id))
+            model_config = self.session.get(LLMConfig, UUID(model_config_id))
             if not model_config:
                 logger.error(f"模型配置不存在: {model_config_id}")
                 self._mark_task_failed(task, "DIFY_BAD_PARAMS", "模型配置不存在")
@@ -112,7 +115,7 @@ class SyntaxService:
     def _call_dify_api(
         self,
         task: RecognitionTask,
-        model_config: ModelConfig,
+        model_config: LLMConfig,
         file: InvoiceFile
     ) -> Dict[str, Any]:
         """
@@ -127,9 +130,9 @@ class SyntaxService:
             dict: 包含success、data或error_code、error_message
         """
         try:
-            # 获取API配置（优先使用syntax_*字段，兼容dify_*字段）
-            endpoint = model_config.syntax_endpoint or model_config.dify_endpoint
-            api_key = model_config.syntax_api_key or model_config.dify_api_key
+            # 获取API配置（从 llm_config 表）
+            endpoint = model_config.endpoint
+            api_key = model_config.api_key
             
             if not endpoint:
                 return {
@@ -182,18 +185,40 @@ class SyntaxService:
             user_id = f"user_{task.operator_id}"
             logger.info(f"用户ID: {user_id}")
             
+            # 获取 output_schema 的 schema_definition（如果存在）
+            schema_definition = None
+            if task.params and task.params.get("output_schema_id"):
+                schema_id = task.params.get("output_schema_id")
+                try:
+                    schema = self.session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
+                    if schema and schema.schema_definition:
+                        schema_definition = schema.schema_definition
+                        logger.info(f"获取到 Schema ID: {schema_id}")
+                        logger.info(f"Schema 名称: {schema.name}")
+                        logger.info(f"Schema 定义字段数: {len(schema.schema_definition) if isinstance(schema.schema_definition, dict) else 'N/A'}")
+                except Exception as e:
+                    logger.warning(f"获取 Schema 定义失败: {str(e)}，将继续使用默认参数")
+            
             # 构建请求报文（使用external_file_id作为upload_file_id）
             endpoint_clean = endpoint.rstrip('/')
             url = f"{endpoint_clean}/workflows/run"
             
+            # 构建 inputs，包含文件信息和 schema_definition
+            inputs = {
+                "InvoiceFile": {
+                    "transfer_method": "local_file",
+                    "type": file_type_value,
+                    "upload_file_id": file.external_file_id  # 使用invoice_file表中的external_file_id
+                }
+            }
+            
+            # 如果存在 schema_definition，添加到 inputs 中
+            if schema_definition:
+                inputs["OutputSchema"] = schema_definition
+                logger.info("已将 schema_definition 添加到请求 inputs 中")
+            
             payload = {
-                "inputs": {
-                    "InvoiceFile": {
-                        "transfer_method": "local_file",
-                        "type": file_type_value,
-                        "upload_file_id": file.external_file_id  # 使用invoice_file表中的external_file_id
-                    }
-                },
+                "inputs": inputs,
                 "response_mode": "blocking",
                 "user": user_id
             }
@@ -557,27 +582,46 @@ class SyntaxService:
                     logger.info("从 full_response 提取数据")
                 
                 logger.info(f"最终数据源: {json.dumps(source_data, ensure_ascii=False, indent=2)}")
-                
-                if source_data:
+
+                # 获取模型配置，用于Schema验证
+                model_config = self.session.get(LLMConfig, UUID(task.params.get("model_config_id"))) if task.params and task.params.get("model_config_id") else None
+
+                # TODO: 暂时禁用Schema验证服务，避免阻塞任务处理
+                # 待Schema验证服务稳定后再启用
+                processed_data = source_data
+                # if source_data and model_config:
+                #     try:
+                #         # 添加超时保护，避免Schema验证阻塞任务处理
+                #         import time
+                #         start_time = time.time()
+                #         processed_data = self._process_with_schema_validation(source_data, task, model_config)
+                #         elapsed_time = time.time() - start_time
+                #         logger.info(f"Schema验证处理完成，耗时: {elapsed_time:.2f}秒，最终数据字段数: {len(processed_data) if isinstance(processed_data, dict) else 'N/A'}")
+                #     except Exception as e:
+                #         logger.error(f"Schema验证处理失败，使用原始数据继续: {str(e)}", exc_info=True)
+                #         # 如果Schema验证失败，使用原始数据继续流程
+                #         processed_data = source_data
+
+                if processed_data:
                     # 根据映射关系提取字段
                     # invoice_title -> invoice_type
-                    if "invoice_title" in source_data:
-                        invoice.invoice_type = str(source_data["invoice_title"])[:50]  # 限制长度
+                    if "invoice_title" in processed_data:
+                        invoice.invoice_type = str(processed_data["invoice_title"])[:50]  # 限制长度
                         logger.info(f"更新 invoice_type: {invoice.invoice_type}")
-                    
+
                     # invoice_no -> invoice_no
-                    if "invoice_no" in source_data:
-                        invoice.invoice_no = str(source_data["invoice_no"])[:100]  # 限制长度
+                    if "invoice_no" in processed_data:
+                        invoice.invoice_no = str(processed_data["invoice_no"])[:100]  # 限制长度
                         logger.info(f"更新 invoice_no: {invoice.invoice_no}")
-                    
+
                     # supplier_no -> supplier_name (如果seller_info->name不存在)
-                    if "supplier_no" in source_data and not invoice.supplier_name:
-                        invoice.supplier_name = str(source_data["supplier_no"])[:200]
+                    if "supplier_no" in processed_data and not invoice.supplier_name:
+                        invoice.supplier_name = str(processed_data["supplier_no"])[:200]
                         logger.info(f"更新 supplier_name (from supplier_no): {invoice.supplier_name}")
                     
                     # docdate -> invoice_date
-                    if "docdate" in source_data:
-                        date_str = source_data["docdate"]
+                    if "docdate" in processed_data:
+                        date_str = processed_data["docdate"]
                         if date_str:
                             try:
                                 if date_parser:
@@ -590,8 +634,8 @@ class SyntaxService:
                                 logger.warning(f"解析日期失败: {date_str}, 错误: {str(e)}")
                     
                     # buyer_info->name -> buyer_name
-                    if "buyer_info" in source_data and isinstance(source_data["buyer_info"], dict):
-                        buyer_info = source_data["buyer_info"]
+                    if "buyer_info" in processed_data and isinstance(processed_data["buyer_info"], dict):
+                        buyer_info = processed_data["buyer_info"]
                         if "name" in buyer_info:
                             invoice.buyer_name = str(buyer_info["name"])[:200]
                             logger.info(f"更新 buyer_name: {invoice.buyer_name}")
@@ -600,8 +644,8 @@ class SyntaxService:
                             logger.info(f"更新 buyer_tax_no: {invoice.buyer_tax_no}")
                     
                     # seller_info->name -> supplier_name
-                    if "seller_info" in source_data and isinstance(source_data["seller_info"], dict):
-                        seller_info = source_data["seller_info"]
+                    if "seller_info" in processed_data and isinstance(processed_data["seller_info"], dict):
+                        seller_info = processed_data["seller_info"]
                         if "name" in seller_info:
                             invoice.supplier_name = str(seller_info["name"])[:200]
                             logger.info(f"更新 supplier_name: {invoice.supplier_name}")
@@ -610,48 +654,48 @@ class SyntaxService:
                             logger.info(f"更新 supplier_tax_no: {invoice.supplier_tax_no}")
                     
                     # total_amount_exclusive_tax -> amount
-                    if "total_amount_exclusive_tax" in source_data:
+                    if "total_amount_exclusive_tax" in processed_data:
                         try:
-                            invoice.amount = float(source_data["total_amount_exclusive_tax"])
+                            invoice.amount = float(processed_data["total_amount_exclusive_tax"])
                             logger.info(f"更新 amount: {invoice.amount}")
                         except (ValueError, TypeError) as e:
-                            logger.warning(f"解析amount失败: {source_data['total_amount_exclusive_tax']}, 错误: {str(e)}")
-                    
+                            logger.warning(f"解析amount失败: {processed_data['total_amount_exclusive_tax']}, 错误: {str(e)}")
+
                     # total_tax_amount -> tax_amount
-                    if "total_tax_amount" in source_data:
+                    if "total_tax_amount" in processed_data:
                         try:
-                            invoice.tax_amount = float(source_data["total_tax_amount"])
+                            invoice.tax_amount = float(processed_data["total_tax_amount"])
                             logger.info(f"更新 tax_amount: {invoice.tax_amount}")
                         except (ValueError, TypeError) as e:
-                            logger.warning(f"解析tax_amount失败: {source_data['total_tax_amount']}, 错误: {str(e)}")
-                    
+                            logger.warning(f"解析tax_amount失败: {processed_data['total_tax_amount']}, 错误: {str(e)}")
+
                     # total_amount_inclusive_tax->in_figures -> total_amount
-                    if "total_amount_inclusive_tax" in source_data:
-                        if isinstance(source_data["total_amount_inclusive_tax"], dict):
-                            if "in_figures" in source_data["total_amount_inclusive_tax"]:
+                    if "total_amount_inclusive_tax" in processed_data:
+                        if isinstance(processed_data["total_amount_inclusive_tax"], dict):
+                            if "in_figures" in processed_data["total_amount_inclusive_tax"]:
                                 try:
-                                    invoice.total_amount = float(source_data["total_amount_inclusive_tax"]["in_figures"])
+                                    invoice.total_amount = float(processed_data["total_amount_inclusive_tax"]["in_figures"])
                                     logger.info(f"更新 total_amount: {invoice.total_amount}")
                                 except (ValueError, TypeError) as e:
-                                    logger.warning(f"解析total_amount失败: {source_data['total_amount_inclusive_tax']['in_figures']}, 错误: {str(e)}")
-                        elif isinstance(source_data["total_amount_inclusive_tax"], (int, float)):
+                                    logger.warning(f"解析total_amount失败: {processed_data['total_amount_inclusive_tax']['in_figures']}, 错误: {str(e)}")
+                        elif isinstance(processed_data["total_amount_inclusive_tax"], (int, float)):
                             # 如果直接是数字，也尝试使用
                             try:
-                                invoice.total_amount = float(source_data["total_amount_inclusive_tax"])
+                                invoice.total_amount = float(processed_data["total_amount_inclusive_tax"])
                                 logger.info(f"更新 total_amount (直接值): {invoice.total_amount}")
                             except (ValueError, TypeError) as e:
-                                logger.warning(f"解析total_amount失败: {source_data['total_amount_inclusive_tax']}, 错误: {str(e)}")
+                                logger.warning(f"解析total_amount失败: {processed_data['total_amount_inclusive_tax']}, 错误: {str(e)}")
                     
                     # currency -> currency
-                    if "currency" in source_data:
-                        currency = str(source_data["currency"]).strip().upper()
+                    if "currency" in processed_data:
+                        currency = str(processed_data["currency"]).strip().upper()
                         if currency:
                             invoice.currency = currency[:10]  # 限制长度
                             logger.info(f"更新 currency: {invoice.currency}")
-                    
+
                     # remarks -> remark
-                    if "remarks" in source_data:
-                        remarks = str(source_data["remarks"])
+                    if "remarks" in processed_data:
+                        remarks = str(processed_data["remarks"])
                         invoice.remark = remarks[:500] if len(remarks) <= 500 else remarks[:500]  # 限制长度
                         logger.info(f"更新 remark: {invoice.remark[:100]}...")  # 只显示前100字符
                 
@@ -697,9 +741,9 @@ class SyntaxService:
                     if "buyer_tax_no" in normalized_fields and not invoice.buyer_tax_no:
                         invoice.buyer_tax_no = str(normalized_fields["buyer_tax_no"])[:50]
             
-            # 计算统计信息
-            total_fields = len(normalized_fields) if normalized_fields else 0
-            recognized_fields = sum(1 for v in normalized_fields.values() if v is not None and v != "") if normalized_fields else 0
+            # 计算统计信息 - 使用processed_data进行统计
+            total_fields = len(processed_data) if isinstance(processed_data, dict) else (len(normalized_fields) if normalized_fields else 0)
+            recognized_fields = sum(1 for v in processed_data.values() if v is not None and v != "") if isinstance(processed_data, dict) else (sum(1 for v in normalized_fields.values() if v is not None and v != "") if normalized_fields else 0)
             
             # 计算准确率和置信度
             accuracy = result_data.get("accuracy", 0.95)
@@ -757,11 +801,11 @@ class SyntaxService:
             logger.info(f"recognition_status: {invoice.recognition_status}")
             
             # 保存发票行项目到INVOICE_ITEM表
-            if source_data and "items" in source_data and isinstance(source_data["items"], list):
+            if processed_data and "items" in processed_data and isinstance(processed_data["items"], list):
                 logger.info("=" * 80)
                 logger.info("=== 开始保存发票行项目 ===")
-                logger.info(f"找到 {len(source_data['items'])} 个行项目")
-                
+                logger.info(f"找到 {len(processed_data['items'])} 个行项目")
+
                 # 先删除该invoice的所有旧items（如果存在）
                 existing_items = self.session.exec(
                     select(InvoiceItem).where(InvoiceItem.id == invoice.id)
@@ -770,10 +814,10 @@ class SyntaxService:
                     logger.info(f"删除 {len(existing_items)} 个旧的行项目")
                     for old_item in existing_items:
                         self.session.delete(old_item)
-                
+
                 # 遍历items数组，创建InvoiceItem记录
                 items_saved = 0
-                for idx, item_data in enumerate(source_data["items"]):
+                for idx, item_data in enumerate(processed_data["items"]):
                     if not isinstance(item_data, dict):
                         logger.warning(f"跳过无效的行项目数据（索引 {idx}）: {item_data}")
                         continue
@@ -836,6 +880,148 @@ class SyntaxService:
             logger.error(f"保存识别结果失败: {str(e)}", exc_info=True)
             self.session.rollback()
             raise
+
+    def _process_with_schema_validation(
+        self,
+        output_data: Dict[str, Any],
+        task: RecognitionTask,
+        model_config: LLMConfig
+    ) -> Dict[str, Any]:
+        """
+        使用Schema验证服务处理输出数据
+
+        Args:
+            output_data: 原始LLM输出数据
+            task: 识别任务
+            model_config: 模型配置
+
+        Returns:
+            Dict[str, Any]: 处理后的数据
+        """
+        start_time = datetime.now()
+        schema_id = None
+
+        try:
+            # 获取Schema ID（从任务参数或模型配置）
+            if task.params and task.params.get("output_schema_id"):
+                schema_id = task.params["output_schema_id"]
+
+            logger.info("=" * 80)
+            logger.info("=== 开始Schema验证流程 ===")
+            logger.info(f"任务ID: {task.id}")
+            logger.info(f"Schema ID: {schema_id}")
+            logger.info(f"模型配置ID: {model_config.id}")
+            logger.info(f"原始数据字段数: {len(output_data) if isinstance(output_data, dict) else 'N/A'}")
+
+            # 1. Schema验证
+            validation_start = datetime.now()
+            try:
+                import asyncio
+                validation_result = asyncio.run(schema_validation_service.validate_output(
+                    output_data=output_data,
+                    schema_id=schema_id,
+                    model_config_id=str(model_config.id)
+                ))
+            except Exception as e:
+                logger.error(f"Schema验证失败: {str(e)}")
+                validation_result = type('ValidationResult', (), {
+                    'is_valid': True, 'errors': [], 'warnings': []
+                })()
+            validation_time_ms = (datetime.now() - validation_start).total_seconds() * 1000
+
+            logger.info(f"验证结果: {'通过' if validation_result.is_valid else '失败'}")
+            logger.info(f"错误数量: {len(validation_result.errors)}")
+            logger.info(f"警告数量: {len(validation_result.warnings)}")
+            logger.info(f"验证耗时: {validation_time_ms:.2f}ms")
+
+            # 记录验证指标（异步调用）
+            try:
+                asyncio.run(schema_monitoring_service.record_validation(
+                    model_config_id=str(model_config.id),
+                    schema_id=schema_id,
+                    is_valid=validation_result.is_valid,
+                    error_count=len(validation_result.errors),
+                    warning_count=len(validation_result.warnings),
+                    validation_time_ms=validation_time_ms
+                ))
+            except Exception as e:
+                logger.error(f"记录验证指标失败: {str(e)}")
+
+            # 如果验证通过，直接返回原始数据
+            if validation_result.is_valid:
+                logger.info("Schema验证通过，直接返回数据")
+                return output_data
+
+            # 2. 使用 Schema 不匹配处理器进行统一处理
+            logger.info("Schema验证失败，使用不匹配处理器处理")
+            mismatch_result = asyncio.run(schema_mismatch_handler.handle_mismatch(
+                output_data=output_data,
+                schema_id=schema_id,
+                model_config_id=str(model_config.id),
+                handling_strategy="auto"
+            ))
+
+            logger.info(f"不匹配处理完成:")
+            logger.info(f"  - 不匹配项数量: {len(mismatch_result.mismatch_items)}")
+            logger.info(f"  - 严重错误数: {mismatch_result.critical_count}")
+            logger.info(f"  - 高级错误数: {mismatch_result.high_count}")
+            logger.info(f"  - 需要人工审核: {mismatch_result.requires_manual_review}")
+            logger.info(f"  - 处理耗时: {mismatch_result.processing_time_ms:.2f}ms")
+
+            # 记录不匹配详情到数据库
+            try:
+                from app.models.models_invoice import SchemaValidationRecord
+                
+                validation_record = SchemaValidationRecord(
+                    id=uuid4(),
+                    invoice_id=task.invoice_id,
+                    task_id=task.id,
+                    schema_id=UUID(schema_id) if schema_id else None,
+                    is_valid=mismatch_result.validation_result.is_valid if mismatch_result.validation_result else False,
+                    error_count=mismatch_result.total_errors,
+                    warning_count=mismatch_result.total_warnings,
+                    validation_errors={
+                        "mismatch_items": [
+                            {
+                                "field_path": item.field_path,
+                                "mismatch_type": item.mismatch_type.value,
+                                "severity": item.severity.value,
+                                "message": item.message,
+                                "can_auto_repair": item.can_auto_repair,
+                                "repair_suggestion": item.repair_suggestion
+                            }
+                            for item in mismatch_result.mismatch_items
+                        ]
+                    } if mismatch_result.mismatch_items else None,
+                    validation_warnings=mismatch_result.validation_result.warnings if mismatch_result.validation_result else None,
+                    repair_attempted=mismatch_result.repair_result is not None,
+                    repair_success=mismatch_result.repair_result.success if mismatch_result.repair_result else False,
+                    repair_actions=mismatch_result.repair_result.repair_actions if mismatch_result.repair_result else None,
+                    fallback_type=mismatch_result.fallback_result.fallback_type if mismatch_result.fallback_result else None,
+                    fallback_data=mismatch_result.fallback_result.fallback_data if mismatch_result.fallback_result else None,
+                    validation_time_ms=mismatch_result.processing_time_ms,
+                    repair_time_ms=(mismatch_result.repair_result.repair_time.total_seconds() * 1000) if mismatch_result.repair_result else None,
+                    total_time_ms=mismatch_result.processing_time_ms,
+                    created_at=datetime.now()
+                )
+                self.session.add(validation_record)
+                self.session.commit()
+                logger.info(f"Schema验证记录已保存: {validation_record.id}")
+            except Exception as e:
+                logger.error(f"保存Schema验证记录失败: {str(e)}", exc_info=True)
+
+            logger.info("=== Schema验证流程完成 ===")
+            logger.info("=" * 80)
+
+            return mismatch_result.final_data or {}
+
+        except Exception as e:
+            # Schema验证过程出错，使用原始数据
+            logger.error(f"Schema验证过程出错: {str(e)}", exc_info=True)
+            logger.warning("由于Schema验证出错，返回原始数据")
+
+            # 返回原始数据，确保流程继续
+            return output_data
     
     def _mark_task_completed(self, task: RecognitionTask):
         """标记任务为完成"""
