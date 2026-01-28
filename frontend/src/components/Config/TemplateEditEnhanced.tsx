@@ -64,6 +64,7 @@ interface TemplateDetail {
   sample_file_type?: string
   matching_rules?: MatchingRule
   accuracy?: number
+  prompt?: string  // 添加 prompt 字段
   version?: {
     id: string
     version: string
@@ -143,6 +144,8 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
 
       if (response.data) {
         const data = response.data
+        console.log('加载模板数据:', data)
+        console.log('模板提示词字段值:', data.prompt)
         setTemplate(data)
         setFormData({
           name: data.name || '',
@@ -156,7 +159,19 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
           match_threshold: 0.7,
           similarity_threshold: 0.8
         })
-        setTemplatePrompt(data.prompt || '')
+        // 设置提示词（确保正确处理 null/undefined）
+        console.log('原始data.prompt值:', data.prompt, '类型:', typeof data.prompt)
+        const promptValue = (data.prompt !== null && data.prompt !== undefined && data.prompt !== '') 
+            ? String(data.prompt) 
+            : ''
+        console.log('处理后的promptValue:', promptValue)
+        setTemplatePrompt(promptValue)
+        console.log('设置模板提示词到状态:', promptValue)
+        
+        // 使用useEffect确保状态更新后再次检查
+        setTimeout(() => {
+          console.log('延迟检查templatePrompt状态:', templatePrompt)
+        }, 100)
         
         // 加载字段列表
         setFields(data.fields || [])
@@ -230,9 +245,13 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
       const requestData: any = {
         ...formData,
         schema_id: selectedSchemaId || undefined,
-        prompt: templatePrompt || undefined,
+        prompt: templatePrompt !== null && templatePrompt !== undefined ? templatePrompt : '', // 确保总是发送prompt字段
         // matching_rules: matchingRules // 暂时隐藏匹配规则功能
       }
+      console.log('保存模板，完整请求数据:', JSON.stringify(requestData, null, 2))
+      console.log('保存模板，提示词内容:', requestData.prompt)
+      console.log('保存模板，提示词类型:', typeof requestData.prompt)
+      console.log('保存模板，提示词长度:', requestData.prompt ? requestData.prompt.length : 0)
 
       // 如果有示例文件，需要上传
       if (sampleFile) {
@@ -260,9 +279,11 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
         }
       } else if (templateId) {
         // 更新模板基本信息
-        await axios.put(`/api/v1/templates/${templateId}`, requestData, {
+        console.log('发送PUT请求到:', `/api/v1/templates/${templateId}`)
+        const response = await axios.put(`/api/v1/templates/${templateId}`, requestData, {
           headers: token ? { Authorization: `Bearer ${token}` } : {}
         })
+        console.log('PUT请求响应:', response.data)
         
         // 如果有字段变更，需要更新字段（通过版本字段更新接口）
         if (template?.version?.id && fields.length > 0) {
@@ -271,7 +292,10 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
         }
         
         showSuccessToast('模板更新成功')
-        loadTemplate()
+        // 等待一下再重新加载，确保数据库已更新
+        setTimeout(() => {
+          loadTemplate()
+        }, 500)
       }
     } catch (error: any) {
       console.error('保存失败:', error)
@@ -747,13 +771,19 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
               <VStack spacing={4} align="stretch">
                 <Field label="">
                   <Textarea
-                    value={templatePrompt}
-                    onChange={(e) => setTemplatePrompt(e.target.value)}
+                    value={templatePrompt || ''}
+                    onChange={(e) => {
+                      console.log('Textarea onChange, 新值:', e.target.value)
+                      setTemplatePrompt(e.target.value)
+                    }}
                     placeholder="请输入提示词，用于指导AI识别和提取文档中的信息..."
                     rows={8}
                     fontSize="sm"
                     resize="vertical"
                   />
+                  <Text fontSize="xs" color="gray.400" mt={1}>
+                    当前值长度: {templatePrompt?.length || 0} 字符
+                  </Text>
                   <Text fontSize="xs" color="gray.500" mt={2}>
                     提示：提示词将用于指导AI模型识别和提取文档中的关键信息，请详细描述需要提取的字段和要求
                   </Text>

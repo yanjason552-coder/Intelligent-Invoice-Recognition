@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import openpyxl
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from sqlmodel import select
 
 from app.api.deps import CurrentUser, SessionDep
@@ -123,9 +124,19 @@ def get_template_detail(
     template_id: UUID,
     current_user: CurrentUser,
 ) -> Any:
-    template = session.get(Template, template_id)
+    # 使用select查询，确保加载所有字段（包括prompt）
+    template = session.exec(
+        select(Template).where(Template.id == template_id)
+    ).first()
+    
     if not template:
         raise HTTPException(status_code=404, detail="模板不存在")
+    
+    # 刷新对象以确保获取最新数据（包括prompt字段）
+    session.refresh(template)
+    print(f"[DEBUG] 刷新后检查 template.prompt = '{getattr(template, 'prompt', 'NOT_FOUND')}'")
+    print(f"[DEBUG] template对象类型: {type(template)}")
+    print(f"[DEBUG] template.__dict__: {template.__dict__ if hasattr(template, '__dict__') else 'N/A'}")
 
     # 选取当前版本（若为空则取最新 created_at）
     version: TemplateVersion | None = None
@@ -146,14 +157,61 @@ def get_template_detail(
             .order_by(TemplateField.sort_order)
         ).all()
 
-    return {
+    # 调试：检查prompt字段是否存在
+    # 方法1：直接从Template对象获取（SQLModel应该自动映射）
+    prompt_value = getattr(template, 'prompt', None)
+    print(f"[DEBUG] 方法1 - 从Template对象获取prompt: '{prompt_value}', 类型: {type(prompt_value)}")
+    print(f"[DEBUG] Template对象的所有属性: {[attr for attr in dir(template) if not attr.startswith('_')]}")
+    print(f"[DEBUG] Template.__dict__: {template.__dict__ if hasattr(template, '__dict__') else 'N/A'}")
+    
+    # 方法2：总是直接从数据库查询以确保获取最新值（绕过SQLModel可能的缓存问题）
+    try:
+        from sqlmodel import text
+        result = session.exec(
+            text("SELECT prompt FROM template WHERE id = :template_id"),
+            {"template_id": str(template_id)}
+        ).first()
+        
+        print(f"[DEBUG] 方法2 - 数据库查询结果类型: {type(result)}")
+        
+        if result is not None:
+            # result可能是Row对象或tuple
+            if hasattr(result, 'prompt'):
+                db_prompt_value = result.prompt
+            elif isinstance(result, (tuple, list)) and len(result) > 0:
+                db_prompt_value = result[0]
+            elif hasattr(result, '__getitem__'):
+                try:
+                    db_prompt_value = result[0]
+                except:
+                    db_prompt_value = result
+            else:
+                db_prompt_value = result
+            
+            # 如果数据库中有值，使用数据库的值（优先）
+            if db_prompt_value is not None:
+                prompt_value = db_prompt_value
+                print(f"[DEBUG] 方法2 - 从数据库提取的prompt值: '{prompt_value[:100] if len(str(prompt_value)) > 100 else prompt_value}...' (长度: {len(str(prompt_value))})")
+            else:
+                print(f"[DEBUG] 方法2 - 数据库中的prompt值为None")
+        else:
+            print(f"[WARNING] 数据库查询返回None")
+    except Exception as e:
+        print(f"[WARNING] 直接从数据库查询prompt失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+    
+    print(f"[DEBUG] 最终返回的prompt值: '{prompt_value}', 类型: {type(prompt_value)}")
+    
+    # 构建返回数据
+    response_data = {
         "id": str(template.id),
         "name": template.name,
         "template_type": template.template_type,
         "description": template.description,
         "status": template.status,
         "accuracy": template.accuracy,
-        "prompt": template.prompt,
+        "prompt": prompt_value,  # 直接返回，即使是None也要返回
         "schema_id": str(template.default_schema_id) if template.default_schema_id else None,
         "default_schema_id": str(template.default_schema_id) if template.default_schema_id else None,
         "version": (
@@ -189,6 +247,58 @@ def get_template_detail(
         "create_time": template.create_time,
         "update_time": template.update_time,
     }
+    
+    # 调试：确认prompt字段在返回数据中
+    prompt_in_response = response_data.get('prompt')
+    print(f"[DEBUG] 返回数据中的prompt字段: '{prompt_in_response[:100] if prompt_in_response and len(str(prompt_in_response)) > 100 else prompt_in_response}', 类型: {type(prompt_in_response)}")
+    print(f"[DEBUG] 返回数据的所有keys: {list(response_data.keys())}")
+    print(f"[DEBUG] 'prompt' in response_data: {'prompt' in response_data}")
+    print(f"[DEBUG] response_data['prompt'] 直接访问: '{response_data['prompt'][:100] if response_data.get('prompt') and len(str(response_data['prompt'])) > 100 else response_data.get('prompt')}'")
+    
+    # 确保prompt字段存在（即使为None也要包含）
+    if 'prompt' not in response_data:
+        print(f"[ERROR] prompt字段不在response_data中！强制添加...")
+        response_data['prompt'] = prompt_value
+    
+    # 再次验证
+    import json
+    try:
+        json_str = json.dumps(response_data, ensure_ascii=False, default=str)
+        print(f"[DEBUG] JSON序列化测试 - prompt字段是否存在: {'\"prompt\"' in json_str}")
+        if '"prompt"' in json_str:
+            # 提取prompt值
+            import re
+            match = re.search(r'"prompt"\s*:\s*"([^"]*)"', json_str)
+            if match:
+                print(f"[DEBUG] JSON中的prompt值（前100字符）: {match.group(1)[:100]}...")
+    except Exception as e:
+        print(f"[WARNING] JSON序列化测试失败: {e}")
+    
+    # 最终验证：确保prompt字段存在（强制设置，即使为None也要包含）
+    response_data['prompt'] = prompt_value if prompt_value is not None else None
+    print(f"[DEBUG] ✅ 强制设置prompt字段: '{str(response_data['prompt'])[:50] if response_data['prompt'] else 'None'}...'")
+    
+    # 打印最终返回的完整数据结构（仅keys）
+    print(f"[DEBUG] ✅ 最终返回数据的keys: {sorted(response_data.keys())}")
+    print(f"[DEBUG] ✅ prompt字段最终值（前50字符）: '{str(response_data.get('prompt', 'NOT_FOUND'))[:50]}...'")
+    print(f"[DEBUG] ✅ response_data['prompt'] 类型: {type(response_data['prompt'])}")
+    print(f"[DEBUG] ✅ response_data['prompt'] 是否为None: {response_data['prompt'] is None}")
+    
+    # 使用JSONResponse确保字段不被过滤
+    # 确保prompt字段存在（再次强制设置）
+    if 'prompt' not in response_data:
+        response_data['prompt'] = prompt_value if prompt_value is not None else None
+        print(f"[ERROR] ⚠️ prompt字段在最终返回前丢失！已重新添加")
+    
+    # 打印最终验证
+    print(f"[DEBUG] 🔍 最终验证 - response_data包含prompt: {'prompt' in response_data}")
+    print(f"[DEBUG] 🔍 最终验证 - response_data['prompt']值: {repr(response_data.get('prompt', 'NOT_FOUND'))[:100]}")
+    
+    # 使用JSONResponse直接返回，确保不被FastAPI的序列化器过滤
+    return JSONResponse(
+        content=response_data,
+        headers={"Content-Type": "application/json; charset=utf-8"}
+    )
 
 
 @router.get("/versions/{version_id}/fields")
@@ -344,6 +454,9 @@ def update_template(
         raise HTTPException(status_code=404, detail="模板不存在")
 
     payload = body or {}
+    print(f"[DEBUG] 收到更新请求，payload keys: {list(payload.keys())}")
+    print(f"[DEBUG] payload中的prompt值: {payload.get('prompt', 'NOT_FOUND')}")
+    
     if "name" in payload:
         name = _normalize_str(payload.get("name"))
         if not name:
@@ -353,8 +466,16 @@ def update_template(
         template.template_type = _normalize_str(payload.get("template_type")) or "其他"
     if "description" in payload:
         template.description = payload.get("description")
+    # 处理提示词：总是更新（包括空字符串），确保能清空提示词
+    # 注意：这个处理必须在字段更新之前，避免被覆盖
     if "prompt" in payload:
-        template.prompt = payload.get("prompt")
+        prompt_value = payload.get("prompt")
+        # 允许空字符串，确保能清空提示词
+        template.prompt = prompt_value if prompt_value is not None else None
+        print(f"[DEBUG] 设置 template.prompt = '{prompt_value}', 类型: {type(prompt_value)}")
+        print(f"[DEBUG] 设置后检查 template.prompt = '{template.prompt}'")
+    elif "prompt" not in payload:
+        print(f"[DEBUG] 请求中没有 prompt 字段，payload keys: {list(payload.keys())}")
     if "status" in payload:
         template.status = _safe_template_status(payload.get("status"))
     
@@ -498,9 +619,34 @@ def update_template(
                 session.add(new_field)
 
     template.update_time = datetime.now()
+    
+    # 调试：检查prompt字段是否被设置（在字段更新之后再次检查）
+    print(f"[DEBUG] 字段更新后，保存前检查 - template.prompt = '{getattr(template, 'prompt', 'ATTRIBUTE_NOT_FOUND')}'")
+    print(f"[DEBUG] 保存前检查 - hasattr(template, 'prompt') = {hasattr(template, 'prompt')}")
+    
+    # 确保prompt字段被正确设置（防止被字段更新逻辑覆盖）
+    if "prompt" in payload:
+        prompt_value = payload.get("prompt")
+        template.prompt = prompt_value if prompt_value is not None else None
+        print(f"[DEBUG] 最终确认设置 template.prompt = '{template.prompt}'")
+    
     session.add(template)
-    session.commit()
-    session.refresh(template)
+    try:
+        session.commit()
+        session.refresh(template)
+        print(f"[DEBUG] 保存后检查 - template.prompt = '{getattr(template, 'prompt', 'ATTRIBUTE_NOT_FOUND')}'")
+        
+        # 直接从数据库查询验证
+        verify_template = session.exec(select(Template).where(Template.id == template_id)).first()
+        if verify_template:
+            print(f"[DEBUG] 数据库验证 - verify_template.prompt = '{getattr(verify_template, 'prompt', 'ATTRIBUTE_NOT_FOUND')}'")
+    except Exception as e:
+        print(f"[ERROR] 保存模板失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"保存模板失败: {str(e)}")
+    
     return Message(message="模板更新成功")
 
 

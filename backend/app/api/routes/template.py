@@ -126,6 +126,12 @@ def get_template_detail(
     template = session.get(Template, template_id)
     if not template:
         raise HTTPException(status_code=404, detail="模板不存在")
+    
+    # 刷新对象以确保获取最新数据
+    try:
+        session.refresh(template)
+    except Exception:
+        pass  # 如果刷新失败，继续使用已有数据
 
     # 选取当前版本（若为空则取最新 created_at）
     version: TemplateVersion | None = None
@@ -146,6 +152,37 @@ def get_template_detail(
             .order_by(TemplateField.sort_order)
         ).all()
 
+    # 安全获取 prompt 字段（兼容数据库列已添加但模型未刷新的情况）
+    prompt_value = None
+    try:
+        # 先尝试从模型对象获取
+        if hasattr(template, 'prompt'):
+            prompt_value = template.prompt
+        else:
+            # 如果模型没有该属性，使用 SQL 查询
+            from sqlalchemy import text
+            result = session.execute(
+                text("SELECT prompt FROM template WHERE id = :id"),
+                {"id": str(template_id)}
+            ).fetchone()
+            if result:
+                prompt_value = result[0] if result[0] else None
+    except Exception as e:
+        # 如果获取失败，尝试使用原始 SQL 查询作为后备
+        try:
+            from sqlalchemy import text
+            result = session.execute(
+                text("SELECT prompt FROM template WHERE id = :id"),
+                {"id": str(template_id)}
+            ).fetchone()
+            if result:
+                prompt_value = result[0] if result[0] else None
+        except Exception:
+            prompt_value = None
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"获取 prompt 字段失败: {str(e)}")
+    
     return {
         "id": str(template.id),
         "name": template.name,
@@ -155,6 +192,7 @@ def get_template_detail(
         "accuracy": template.accuracy,
         "schema_id": str(template.default_schema_id) if template.default_schema_id else None,
         "default_schema_id": str(template.default_schema_id) if template.default_schema_id else None,
+        "prompt": prompt_value,  # prompt 字段
         "version": {
             "id": str(version.id) if version else None,
             "version": version.version if version else None,
@@ -245,6 +283,7 @@ def create_template(
     template_type = _normalize_str(payload.get("template_type")) or "其他"
     description = payload.get("description")
     status = _safe_template_status(payload.get("status"))
+    prompt = payload.get("prompt")  # 获取 prompt 字段
     if not name:
         raise HTTPException(status_code=400, detail="模板名称不能为空")
 
@@ -274,6 +313,7 @@ def create_template(
         template_type=template_type,
         description=description,
         status=status,
+        prompt=prompt,  # prompt 字段
         default_schema_id=default_schema_id,
         # 注意：current_version_id 有外键约束指向 template_version.id，
         # 不能在首次 INSERT template 时就赋值一个尚不存在的版本ID，否则会触发 FK violation。
@@ -335,6 +375,27 @@ def update_template(
         raise HTTPException(status_code=404, detail="模板不存在")
 
     payload = body or {}
+    
+    # 先检查 prompt 字段是否需要单独处理（使用 SQL 更新）
+    prompt_value = None
+    need_sql_update_prompt = False
+    if "prompt" in payload:
+        prompt_value = payload.get("prompt")
+        # 尝试设置 prompt 字段，如果失败则标记为需要使用 SQL 更新
+        try:
+            # 先检查实例是否有该属性
+            if hasattr(template, 'prompt'):
+                template.prompt = prompt_value
+            else:
+                need_sql_update_prompt = True
+        except (AttributeError, ValueError, TypeError) as e:
+            # 如果设置失败，使用 SQL 更新
+            need_sql_update_prompt = True
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"无法直接设置 prompt 字段，将使用 SQL 更新: {str(e)}")
+    
+    # 更新其他字段
     if "name" in payload:
         template.name = _normalize_str(payload["name"])
         if not template.name:
@@ -372,6 +433,33 @@ def update_template(
     template.update_time = datetime.now()
     session.add(template)
     session.commit()
+    
+    # 如果 prompt 字段需要单独用 SQL 更新，在这里执行
+    # 注意：即使 prompt_value 是空字符串，也要更新（允许清空提示词）
+    if need_sql_update_prompt:
+        try:
+            from sqlalchemy import text
+            # 使用 session.execute() 而不是 session.exec()
+            # 允许 None 和空字符串
+            final_prompt_value = prompt_value if prompt_value is not None else None
+            session.execute(
+                text("UPDATE template SET prompt = :prompt, update_time = :update_time WHERE id = :id"),
+                {
+                    "prompt": final_prompt_value,
+                    "update_time": datetime.now(),
+                    "id": str(template_id)
+                }
+            )
+            session.commit()
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"使用 SQL 成功更新 prompt 字段，值: '{final_prompt_value}'")
+        except Exception as e:
+            # 如果 SQL 更新失败，记录错误但不影响其他字段的更新
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"使用 SQL 更新 prompt 字段失败: {str(e)}", exc_info=True)
+            # 注意：这里不 rollback，因为其他字段已经成功更新了
 
     return Message(message="模板更新成功")
 
