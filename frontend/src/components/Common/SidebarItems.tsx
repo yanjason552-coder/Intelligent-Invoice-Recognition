@@ -97,14 +97,15 @@ const menu: MenuGroup[] = [
           { title: "配置列表", path: "/llm-config-list-page", action: "open-tab" }
         ]
       },
-      { 
-        title: "Schema 配置与监控", 
-        path: "/schema-config-monitoring",
-        children: [
-          { title: "Schema 配置列表", path: "/schema-list", action: "open-tab" },
-          { title: "Schema 识别监控", path: "/schema-monitoring", action: "open-tab" }
-        ]
-      },
+      // Schema 配置与监控菜单已隐藏
+      // { 
+      //   title: "Schema 配置与监控", 
+      //   path: "/schema-config-monitoring",
+      //   children: [
+      //     { title: "Schema 配置列表", path: "/schema-list", action: "open-tab" },
+      //     { title: "Schema 识别监控", path: "/schema-monitoring", action: "open-tab" }
+      //   ]
+      // },
       { 
         title: "单据模板配置", 
         path: "/template-config",

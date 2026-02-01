@@ -20,7 +20,6 @@ interface LLMConfigData {
   is_active: boolean
   is_default?: boolean
   description?: string
-  default_schema_id?: string
 }
 
 const LLMConfig = () => {
@@ -35,18 +34,15 @@ const LLMConfig = () => {
     max_retries: 3,
     is_active: true,
     is_default: false,
-    description: '',
-    default_schema_id: ''
+    description: ''
   })
   const [loading, setLoading] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
-  const [schemas, setSchemas] = useState<Array<{id: string, name: string, version: string, is_default: boolean}>>([])
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
   useEffect(() => {
     loadConfig()
-    loadSchemas()
   }, [])
 
   const loadConfig = async () => {
@@ -58,27 +54,12 @@ const LLMConfig = () => {
       if (response.data) {
         setConfig({
           ...response.data,
-          api_key: response.data.api_key || '', // 如果后端返回脱敏的key，这里保持原值
-          default_schema_id: response.data.default_schema_id || ''
+          api_key: response.data.api_key || '' // 如果后端返回脱敏的key，这里保持原值
         })
       }
     } catch (error: any) {
       console.error('加载配置失败:', error)
       // 如果配置不存在，使用默认值
-    }
-  }
-
-  const loadSchemas = async () => {
-    try {
-      const token = localStorage.getItem('access_token')
-      const response = await axios.get('/api/v1/config/schemas', {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
-      })
-      if (response.data && response.data.data) {
-        setSchemas(response.data.data.filter((s: any) => s.is_active))
-      }
-    } catch (error: any) {
-      console.error('加载Schema列表失败:', error)
     }
   }
 
@@ -300,39 +281,6 @@ const LLMConfig = () => {
                       </Text>
                     </Field>
                   )}
-                </VStack>
-              </Box>
-
-              {/* Schema配置 */}
-              <Box>
-                <Text fontSize="md" fontWeight="semibold" mb={4} color="gray.700">
-                  Schema配置
-                </Text>
-                <VStack gap={4}>
-                  <Field label="默认输出Schema">
-                    <select
-                      value={config.default_schema_id || ''}
-                      onChange={(e) => setConfig({ ...config, default_schema_id: e.target.value })}
-                      style={{
-                        width: '100%',
-                        padding: '8px 12px',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '6px',
-                        fontSize: '14px',
-                        backgroundColor: 'white'
-                      }}
-                    >
-                      <option value="">不使用Schema（原有逻辑）</option>
-                      {schemas.map((schema) => (
-                        <option key={schema.id} value={schema.id}>
-                          {schema.name} (v{schema.version}){schema.is_default ? ' - 默认' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <Text fontSize="xs" color="gray.500" mt={1}>
-                      选择该模型配置默认使用的输出结构标准。留空则不进行Schema验证。
-                    </Text>
-                  </Field>
                 </VStack>
               </Box>
 

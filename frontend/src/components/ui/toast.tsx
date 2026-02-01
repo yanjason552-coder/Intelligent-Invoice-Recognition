@@ -1,6 +1,4 @@
-"use client"
-
-import React, { createContext, useContext, useState, useCallback } from 'react'
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react'
 
 interface Toast {
   id: string
@@ -17,7 +15,7 @@ interface ToastContextType {
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined)
 
-export const useToast = () => {
+export function useToast() {
   const context = useContext(ToastContext)
   if (!context) {
     throw new Error('useToast must be used within a ToastProvider')
@@ -25,8 +23,36 @@ export const useToast = () => {
   return context
 }
 
-export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+function ToastProviderComponent({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
+
+  // 添加CSS动画（仅在客户端执行一次）
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      const styleId = 'toast-animation-style'
+      if (!document.getElementById(styleId)) {
+        const style = document.createElement('style')
+        style.id = styleId
+        style.textContent = `
+          @keyframes slideIn {
+            from {
+              transform: translateX(100%);
+              opacity: 0;
+            }
+            to {
+              transform: translateX(0);
+              opacity: 1;
+            }
+          }
+        `
+        document.head.appendChild(style)
+      }
+    }
+  }, [])
+
+  const removeToast = useCallback((id: string) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id))
+  }, [])
 
   const addToast = useCallback((toast: Omit<Toast, 'id'>) => {
     const id = Math.random().toString(36).substr(2, 9)
@@ -38,11 +64,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setTimeout(() => {
       removeToast(id)
     }, 3000)
-  }, [])
-
-  const removeToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(toast => toast.id !== id))
-  }, [])
+  }, [removeToast])
 
   return (
     <ToastContext.Provider value={{ toasts, addToast, removeToast }}>
@@ -147,18 +169,5 @@ const ToastItem: React.FC<{ toast: Toast, removeToast: (id: string) => void }> =
   )
 }
 
-// 添加CSS动画
-const style = document.createElement('style')
-style.textContent = `
-  @keyframes slideIn {
-    from {
-      transform: translateX(100%);
-      opacity: 0;
-    }
-    to {
-      transform: translateX(0);
-      opacity: 1;
-    }
-  }
-`
-document.head.appendChild(style) 
+// 明确导出
+export const ToastProvider = ToastProviderComponent

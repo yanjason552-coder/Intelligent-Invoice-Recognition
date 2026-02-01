@@ -16,7 +16,8 @@ from app.models.models_invoice import (
     RecognitionTask, RecognitionTaskCreate, RecognitionTaskResponse, RecognitionTaskBatchCreate,
     RecognitionResult, RecognitionResultResponse,
     RecognitionField, ReviewRecord, InvoiceFileListItem,
-    OutputSchema, LLMConfig, InvoiceItem, InvoiceItemUpdate, InvoiceItemsBatchUpdate
+    OutputSchema, LLMConfig, InvoiceItem, InvoiceItemUpdate, InvoiceItemsBatchUpdate,
+    SchemaValidationRecord
 )
 from sqlmodel import SQLModel, Field
 
@@ -406,6 +407,19 @@ def create_recognition_task(
         if not invoice:
             raise HTTPException(status_code=404, detail="票据不存在")
         
+        # 检查文件状态：只要文件状态不是成功状态（processed），都可以再次识别
+        if invoice.file_id:
+            from app.models.models_invoice import InvoiceFile
+            invoice_file = session.get(InvoiceFile, invoice.file_id)
+            if invoice_file:
+                # 如果文件状态是 "processed"（成功状态），不允许再次识别
+                if invoice_file.status == "processed":
+                    raise HTTPException(
+                        status_code=400, 
+                        detail=f"文件状态为成功（processed），不允许再次识别。文件: {invoice_file.file_name}"
+                    )
+                logger.info(f"文件状态检查通过：文件ID={invoice_file.id}, 状态={invoice_file.status}, 允许创建识别任务")
+        
         # 验证模型配置是否存在且可用
         model_config = session.get(LLMConfig, task_in.params.model_config_id)
         if not model_config:
@@ -425,13 +439,52 @@ def create_recognition_task(
         if task_in.params.recognition_mode not in allowed_modes:
             raise HTTPException(status_code=400, detail=f"识别方式 {task_in.params.recognition_mode} 不在允许列表中")
         
-        # 模板策略处理（模板功能已废弃，template_id 设为 None）
+        # 模板策略处理
         template_id = None
+        template_prompt = None
+        logger.info(f"模板策略: {task_in.params.template_strategy}, template_id: {task_in.params.template_id}")
         if task_in.params.template_strategy == "fixed":
-            # 模板功能已废弃，忽略 template_id
-            logger.warning("模板策略 'fixed' 已废弃，将忽略 template_id")
+            # 用户指定模板，获取模板的 prompt
+            if task_in.params.template_id:
+                # 确保 template_id 是 UUID 类型
+                from uuid import UUID
+                if isinstance(task_in.params.template_id, str):
+                    template_id = UUID(task_in.params.template_id)
+                else:
+                    template_id = task_in.params.template_id
+                
+                logger.info(f"设置 template_id: {template_id} (类型: {type(template_id)})")
+                from app.models.models_invoice import Template
+                try:
+                    template = session.get(Template, template_id)
+                    if template:
+                        # 安全获取 prompt 字段
+                        try:
+                            template_prompt = getattr(template, 'prompt', None)
+                        except Exception:
+                            # 如果获取失败，尝试使用 SQL 查询
+                            try:
+                                from sqlalchemy import text
+                                result = session.execute(
+                                    text("SELECT prompt FROM template WHERE id = :id"),
+                                    {"id": str(template.id)}
+                                ).fetchone()
+                                if result:
+                                    template_prompt = result[0] if result[0] else None
+                            except Exception as e:
+                                logger.warning(f"通过SQL查询模板prompt失败: {str(e)}")
+                                template_prompt = None
+                        
+                        if template_prompt:
+                            logger.info(f"获取到模板提示词，长度: {len(template_prompt)} 字符")
+                        else:
+                            logger.warning(f"模板 {template_id} 没有设置 prompt 字段")
+                    else:
+                        logger.warning(f"模板 {template_id} 不存在，但会使用 params 中的 template_id")
+                except Exception as e:
+                    logger.error(f"查询模板失败: {str(e)}，但会使用 params 中的 template_id")
         elif task_in.params.template_strategy == "auto":
-            # 模板功能已废弃，不再使用票据关联的模板
+            # 自动匹配模板（暂时不支持）
             template_id = None
         
         # 验证输出结构标准（如果提供）
@@ -445,6 +498,9 @@ def create_recognition_task(
         
         # 构建参数快照（将UUID转换为字符串以便JSON序列化）
         params_dict = task_in.params.model_dump()
+        # 如果获取到模板提示词，添加到参数中
+        if template_prompt:
+            params_dict["template_prompt"] = template_prompt
         # 将UUID对象转换为字符串
         def convert_uuid_to_str(obj):
             """递归将UUID对象转换为字符串"""
@@ -460,19 +516,29 @@ def create_recognition_task(
         params_dict = convert_uuid_to_str(params_dict)
         
         # 创建任务
-        task = RecognitionTask(
-            task_no=task_no,
-            invoice_id=task_in.invoice_id,
-            template_id=template_id,
-            params=params_dict,
-            priority=task_in.priority,
-            operator_id=current_user.id,
-            status="pending",
-            provider="dify"
-        )
-        session.add(task)
-        session.commit()
-        session.refresh(task)
+        logger.info(f"创建任务，template_id: {template_id} (类型: {type(template_id)})")
+        logger.info(f"创建任务前，template_id 值: {template_id}, 是否为 None: {template_id is None}")
+        try:
+            task = RecognitionTask(
+                task_no=task_no,
+                invoice_id=task_in.invoice_id,
+                template_id=template_id,
+                params=params_dict,
+                priority=task_in.priority,
+                operator_id=current_user.id,
+                status="pending",
+                provider="dify"
+            )
+            logger.info(f"任务对象创建完成，task.template_id: {task.template_id}")
+            session.add(task)
+            logger.info(f"任务已添加到session，准备提交")
+            session.commit()
+            logger.info(f"任务已提交到数据库")
+            session.refresh(task)
+            logger.info(f"任务刷新完成，task.template_id: {task.template_id}")
+        except Exception as e:
+            logger.error(f"创建任务时出错: {str(e)}", exc_info=True)
+            raise
         
         # 获取模型名称用于响应
         model_name = model_config.name
@@ -676,6 +742,16 @@ async def batch_create_recognition_tasks(
                 else:
                     file_uuid = file_id
                 
+                # 检查文件状态：只要文件状态不是成功状态（processed），都可以再次识别
+                from app.models.models_invoice import InvoiceFile
+                invoice_file = session.get(InvoiceFile, file_uuid)
+                if invoice_file:
+                    # 如果文件状态是 "processed"（成功状态），不允许再次识别
+                    if invoice_file.status == "processed":
+                        logger.warning(f"文件 [{idx}] 状态为成功（processed），跳过创建识别任务。文件: {invoice_file.file_name}")
+                        continue  # 跳过这个文件，继续处理下一个
+                    logger.info(f"文件 [{idx}] 状态检查通过：文件ID={invoice_file.id}, 状态={invoice_file.status}, 允许创建识别任务")
+                
                 logger.info(f"  转换后的UUID: {file_uuid}")
                 
                 # 通过file_id查找invoice
@@ -710,18 +786,74 @@ async def batch_create_recognition_tasks(
             else:
                 return obj
         
+        # 模板策略处理（批量任务也支持模板）
+        template_id = None
+        template_prompt = None
+        logger.info(f"批量任务 - 模板策略: {batch_in.params.template_strategy}, template_id: {batch_in.params.template_id}")
+        if batch_in.params.template_strategy == "fixed":
+            # 用户指定模板，获取模板的 prompt
+            if batch_in.params.template_id:
+                # 确保 template_id 是 UUID 类型
+                from uuid import UUID
+                if isinstance(batch_in.params.template_id, str):
+                    template_id = UUID(batch_in.params.template_id)
+                else:
+                    template_id = batch_in.params.template_id
+                
+                logger.info(f"批量任务 - 设置 template_id: {template_id} (类型: {type(template_id)})")
+                from app.models.models_invoice import Template
+                try:
+                    template = session.get(Template, template_id)
+                    if template:
+                        # 安全获取 prompt 字段
+                        template_prompt = None
+                        try:
+                            # 首先尝试直接获取
+                            template_prompt = getattr(template, 'prompt', None)
+                            logger.info(f"批量任务 - getattr获取prompt结果: {template_prompt is not None}, 值长度: {len(template_prompt) if template_prompt else 0}")
+                        except Exception as e:
+                            logger.warning(f"批量任务 - getattr获取prompt失败: {str(e)}")
+                        
+                        # 如果 getattr 返回 None 或空字符串，尝试使用 SQL 查询
+                        if not template_prompt:
+                            try:
+                                from sqlalchemy import text
+                                logger.info(f"批量任务 - 尝试通过SQL查询模板prompt")
+                                result = session.execute(
+                                    text("SELECT prompt FROM template WHERE id = :id"),
+                                    {"id": str(template.id)}
+                                ).fetchone()
+                                if result and result[0]:
+                                    template_prompt = result[0]
+                                    logger.info(f"批量任务 - SQL查询成功获取prompt，长度: {len(template_prompt)} 字符")
+                                else:
+                                    logger.warning(f"批量任务 - SQL查询返回空结果")
+                            except Exception as e:
+                                logger.warning(f"批量任务 - 通过SQL查询模板prompt失败: {str(e)}")
+                        
+                        if template_prompt:
+                            logger.info(f"批量任务 - 最终获取到模板提示词，长度: {len(template_prompt)} 字符")
+                        else:
+                            logger.warning(f"批量任务 - 模板 {template_id} 没有设置 prompt 字段")
+                    else:
+                        logger.warning(f"批量任务 - 模板 {template_id} 不存在，但会使用 params 中的 template_id")
+                except Exception as e:
+                    logger.error(f"批量任务 - 查询模板失败: {str(e)}，但会使用 params 中的 template_id")
+        
+        # 如果获取到模板提示词，添加到参数中
+        if template_prompt:
+            params_dict["template_prompt"] = template_prompt
+        
         params_dict = convert_uuid_to_str(params_dict)
         logger.info(f"转换后的参数字典: {json.dumps(params_dict, ensure_ascii=False, indent=2)}")
         
         # 批量创建任务
         created_tasks = []
         for invoice in invoices:
-            # 模板策略处理（模板功能已废弃）
-            template_id = None
-            
             # 生成任务编号
             task_no = f"TASK-{datetime.now().strftime('%Y%m%d%H%M%S')}-{str(uuid4())[:8]}"
             
+            logger.info(f"批量任务 - 创建任务，template_id: {template_id} (类型: {type(template_id)})")
             task = RecognitionTask(
                 task_no=task_no,
                 invoice_id=invoice.id,
@@ -1128,6 +1260,22 @@ def get_invoice(
         if company:
             company_code = company.code
     
+    # 获取最新失败任务的错误信息
+    error_code = None
+    error_message = None
+    if invoice.recognition_status == "failed":
+        failed_task = session.exec(
+            select(RecognitionTask)
+            .where(
+                RecognitionTask.invoice_id == invoice_id,
+                RecognitionTask.status == "failed"
+            )
+            .order_by(RecognitionTask.create_time.desc())
+        ).first()
+        if failed_task:
+            error_code = failed_task.error_code
+            error_message = failed_task.error_message
+    
     return InvoiceResponse(
         id=invoice.id,
         invoice_no=invoice.invoice_no,
@@ -1146,7 +1294,9 @@ def get_invoice(
         review_status=invoice.review_status,
         company_id=invoice.company_id,
         company_code=company_code,
-        create_time=invoice.create_time
+        create_time=invoice.create_time,
+        error_code=error_code,
+        error_message=error_message
     )
 
 
@@ -1594,3 +1744,96 @@ def get_recognition_fields(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.get("/{invoice_id}/schema-validation-status")
+def get_invoice_schema_validation_status(
+    *,
+    session: SessionDep,
+    invoice_id: UUID,
+    current_user: CurrentUser
+) -> Any:
+    """
+    获取发票的Schema验证状态
+    """
+    try:
+        # 获取发票信息
+        invoice = session.get(Invoice, invoice_id)
+        if not invoice:
+            raise HTTPException(status_code=404, detail="发票不存在")
+
+        # 获取最新的识别结果
+        recognition_result = session.exec(
+            select(RecognitionResult).where(
+                RecognitionResult.invoice_id == invoice_id,
+                RecognitionResult.status.in_(["success", "partial"])
+            ).order_by(RecognitionResult.recognition_time.desc())
+        ).first()
+
+        if not recognition_result:
+            return None  # 没有识别结果
+
+        # 获取识别任务信息
+        task = session.get(RecognitionTask, recognition_result.task_id)
+        if not task:
+            return None
+
+        # 获取模型配置（从 llm_config 表）
+        model_config = None
+        if task.params and task.params.get("model_config_id"):
+            try:
+                model_config = session.get(LLMConfig, UUID(task.params.get("model_config_id")))
+            except:
+                pass
+
+        # 获取Schema信息（从任务参数中获取 output_schema_id）
+        schema_info = None
+        if task.params and task.params.get("output_schema_id"):
+            try:
+                schema_id = task.params.get("output_schema_id")
+                schema = session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
+                if schema and schema.is_active:
+                    schema_info = {
+                        "id": str(schema.id),
+                        "name": schema.name,
+                        "version": schema.version
+                    }
+            except Exception as e:
+                logger.warning(f"获取Schema信息失败: {str(e)}")
+
+        # 如果没有配置Schema，返回None
+        if not schema_info:
+            return None
+
+        # 获取Schema验证记录
+        validation_record = session.exec(
+            select(SchemaValidationRecord).where(
+                SchemaValidationRecord.invoice_id == invoice_id,
+                SchemaValidationRecord.task_id == recognition_result.task_id
+            ).order_by(SchemaValidationRecord.created_at.desc())
+        ).first()
+
+        if validation_record:
+            # 返回真实的验证记录
+            validation_status = {
+                "is_valid": validation_record.is_valid,
+                "errors": validation_record.validation_errors.get("errors", []) if validation_record.validation_errors else [],
+                "warnings": validation_record.validation_warnings.get("warnings", []) if validation_record.validation_warnings else [],
+                "validation_time": validation_record.created_at.isoformat(),
+                "schema_name": schema_info["name"],
+                "schema_version": schema_info["version"],
+                "repair_attempted": validation_record.repair_attempted,
+                "repair_success": validation_record.repair_success,
+                "fallback_type": validation_record.fallback_type
+            }
+        else:
+            # 如果没有验证记录，说明没有进行Schema验证
+            validation_status = None
+
+        return validation_status
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取Schema验证状态失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取Schema验证状态失败: {str(e)}")

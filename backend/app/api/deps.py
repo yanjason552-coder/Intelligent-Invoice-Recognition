@@ -39,78 +39,12 @@ def get_db() -> Generator[Session, None, None]:
     
     for attempt in range(max_retries):
         try:
+            # 创建会话（pool_pre_ping会自动检查连接有效性，不需要手动测试）
             session = Session(engine, autocommit=False, autoflush=True)
             
-            # 测试连接是否有效（用于早期检测连接问题）
-            try:
-                session.exec(text("SELECT 1"))
-            except (OperationalError, DisconnectionError) as conn_error:
-                session.close()
-                session = None
-                last_error = conn_error
-                
-                # 检查是否是连接被服务器关闭的错误
-                error_str = str(conn_error).lower()
-                if "server closed the connection" in error_str or "connection failed" in error_str:
-                    logger.error(
-                        f"数据库服务器关闭了连接（尝试 {attempt + 1}/{max_retries}）: {conn_error}"
-                    )
-                    if attempt < max_retries - 1:
-                        logger.info(f"{retry_delay}秒后重试...")
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                        continue
-                    else:
-                        # 最后一次尝试也失败，提供详细的错误信息
-                        raise HTTPException(
-                            status_code=503,  # Service Unavailable
-                            detail=(
-                                "数据库服务器连接失败。"
-                                "可能的原因：\n"
-                                "1. 数据库服务器不可用或已重启\n"
-                                "2. 网络连接问题\n"
-                                "3. 防火墙阻止连接\n"
-                                "4. 数据库连接数达到上限\n\n"
-                                f"错误详情: {str(conn_error)}"
-                            )
-                        )
-                else:
-                    # 其他类型的连接错误
-                    if attempt < max_retries - 1:
-                        logger.warning(
-                            f"数据库连接测试失败（尝试 {attempt + 1}/{max_retries}）: {conn_error}，"
-                            f"{retry_delay}秒后重试..."
-                        )
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                        continue
-                    else:
-                        logger.error(f"数据库连接测试失败（已重试{max_retries}次）: {conn_error}", exc_info=True)
-                        raise HTTPException(
-                            status_code=500,
-                            detail=f"数据库连接失败: {str(conn_error)}。请检查数据库服务器是否正常运行。"
-                        )
-            except Exception as conn_error:
-                session.close()
-                session = None
-                last_error = conn_error
-                
-                if attempt < max_retries - 1:
-                    logger.warning(
-                        f"数据库连接测试失败（尝试 {attempt + 1}/{max_retries}）: {conn_error}，"
-                        f"{retry_delay}秒后重试..."
-                    )
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    continue
-                else:
-                    logger.error(f"数据库连接测试失败（已重试{max_retries}次）: {conn_error}", exc_info=True)
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"数据库连接失败: {str(conn_error)}。请检查数据库服务器是否正常运行。"
-                    )
-            
             # 连接成功，跳出重试循环
+            # 注意：移除了手动连接测试，因为pool_pre_ping已经会自动检查连接
+            # 这样可以减少连接占用时间，避免连接池耗尽
             break
             
         except HTTPException:

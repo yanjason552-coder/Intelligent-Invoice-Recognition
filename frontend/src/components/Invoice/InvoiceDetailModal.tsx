@@ -35,6 +35,8 @@ interface InvoiceDetail {
   recognition_status: string
   review_status: string
   create_time: string
+  error_code?: string | null
+  error_message?: string | null
 }
 
 interface SchemaValidationStatus {
@@ -605,7 +607,26 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
                 </GridItem>
                 <GridItem>
                   <Text fontSize="sm" color="gray.600">识别状态</Text>
-                  {getStatusBadge(invoiceDetail.recognition_status)}
+                  <Flex direction="column" gap={2}>
+                    {getStatusBadge(invoiceDetail.recognition_status)}
+                    {invoiceDetail.recognition_status === 'failed' && (invoiceDetail.error_code || invoiceDetail.error_message) && (
+                      <Box bg="red.50" p={2} borderRadius="sm" border="1px" borderColor="red.200">
+                        <Text fontSize="xs" fontWeight="medium" color="red.700" mb={1}>
+                          失败原因:
+                        </Text>
+                        {invoiceDetail.error_code && (
+                          <Text fontSize="xs" color="red.600" mb={0.5}>
+                            错误代码: {invoiceDetail.error_code}
+                          </Text>
+                        )}
+                        {invoiceDetail.error_message && (
+                          <Text fontSize="xs" color="red.600">
+                            {invoiceDetail.error_message}
+                          </Text>
+                        )}
+                      </Box>
+                    )}
+                  </Flex>
                 </GridItem>
                 <GridItem>
                   <Text fontSize="sm" color="gray.600">审核状态</Text>

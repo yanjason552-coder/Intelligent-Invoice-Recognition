@@ -232,6 +232,7 @@ const TemplateConfig = () => {
     try {
       setLoading(true)
       const token = localStorage.getItem('access_token')
+      const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
       const params: any = {
         skip: (currentPage - 1) * pageSize,
         limit: pageSize
@@ -247,7 +248,7 @@ const TemplateConfig = () => {
         params.template_type = typeFilter
       }
 
-      const response = await axios.get('/api/v1/templates', {
+      const response = await axios.get(`${apiBaseUrl}/api/v1/templates`, {
         params,
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       })
@@ -307,8 +308,9 @@ const TemplateConfig = () => {
   const handleCopy = async (template: Template) => {
     try {
       const token = localStorage.getItem('access_token')
+      const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
       // 先获取模板详情
-      const detailResponse = await axios.get(`/api/v1/templates/${template.id}`, {
+      const detailResponse = await axios.get(`${apiBaseUrl}/api/v1/templates/${template.id}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       })
 
@@ -320,7 +322,7 @@ const TemplateConfig = () => {
         status: 'disabled' // 复制的模板默认停用
       }
 
-      await axios.post('/api/v1/templates', newTemplate, {
+      await axios.post(`${apiBaseUrl}/api/v1/templates`, newTemplate, {
         headers: token ? { Authorization: `Bearer ${token}` } : {}
       })
 
@@ -335,9 +337,10 @@ const TemplateConfig = () => {
   const handleToggleStatus = async (template: Template) => {
     try {
       const token = localStorage.getItem('access_token')
+      const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
       const newStatus = template.status === 'enabled' ? 'disabled' : 'enabled'
       
-      await axios.put(`/api/v1/templates/${template.id}`, {
+      await axios.put(`${apiBaseUrl}/api/v1/templates/${template.id}`, {
         status: newStatus
       }, {
         headers: token ? { Authorization: `Bearer ${token}` } : {}

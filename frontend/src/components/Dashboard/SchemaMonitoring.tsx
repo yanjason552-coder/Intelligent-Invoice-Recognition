@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react"
-import { Box, Text, Flex, Grid, GridItem, HStack, VStack, Skeleton, Progress, Badge, Select } from "@chakra-ui/react"
+import { Box, Text, Flex, HStack, VStack, Skeleton, Progress, Badge } from "@chakra-ui/react"
 import { FiCheckCircle, FiXCircle, FiClock, FiTrendingUp, FiActivity, FiShield, FiRefreshCw } from "react-icons/fi"
 import { getApiUrl, getAuthHeaders } from '../../client/unifiedTypes'
 
@@ -79,13 +79,13 @@ const SchemaMonitoring = () => {
     return (
       <Box p={4}>
         <Text fontSize="lg" fontWeight="bold" mb={4}>Schema监控指标</Text>
-        <Grid templateColumns={{ base: "1fr", md: "repeat(2, 1fr)", lg: "repeat(4, 1fr)" }} gap={4}>
+        <Box display="grid" gridTemplateColumns={{ base: "1fr", md: "repeat(2, 1fr)", lg: "repeat(4, 1fr)" }} gap={4}>
           {[...Array(8)].map((_, i) => (
             <Box key={i} p={4} bg="white" borderRadius="md" border="1px" borderColor="gray.200" shadow="sm">
               <Skeleton height="100px" />
             </Box>
           ))}
-        </Grid>
+        </Box>
       </Box>
     )
   }
@@ -106,12 +106,22 @@ const SchemaMonitoring = () => {
         <Text fontSize="lg" fontWeight="bold">Schema监控指标</Text>
         <Flex gap={2} align="center">
           <Text fontSize="sm" color="gray.600">时间范围:</Text>
-          <Select size="sm" value={timeRange} onChange={(e) => setTimeRange(Number(e.target.value))} w="120px">
+          <Box as="select" 
+            size="sm" 
+            value={timeRange} 
+            onChange={(e) => setTimeRange(Number(e.target.value))} 
+            w="120px"
+            p={1}
+            borderRadius="md"
+            border="1px"
+            borderColor="gray.300"
+            fontSize="sm"
+          >
             <option value={1}>1小时</option>
             <option value={6}>6小时</option>
             <option value={24}>24小时</option>
             <option value={168}>7天</option>
-          </Select>
+          </Box>
           <Box
             as="button"
             onClick={loadMonitoringData}
@@ -126,7 +136,7 @@ const SchemaMonitoring = () => {
       </Flex>
 
       {/* 系统状态 */}
-      <Grid templateColumns={{ base: "1fr", md: "repeat(2, 1fr)", lg: "repeat(4, 1fr)" }} gap={4} mb={6}>
+      <Box display="grid" gridTemplateColumns={{ base: "1fr", md: "repeat(2, 1fr)", lg: "repeat(4, 1fr)" }} gap={4} mb={6}>
         <Box p={4} bg="white" borderRadius="md" border="1px" borderColor="gray.200" shadow="sm">
           <VStack align="start" spacing={2}>
             <HStack justify="space-between" w="100%">
@@ -186,10 +196,10 @@ const SchemaMonitoring = () => {
             </Text>
           </VStack>
         </Box>
-      </Grid>
+      </Box>
 
       {/* 详细指标 */}
-      <Grid templateColumns={{ base: "1fr", md: "repeat(2, 1fr)" }} gap={4} mb={6}>
+      <Box display="grid" gridTemplateColumns={{ base: "1fr", md: "repeat(2, 1fr)" }} gap={4} mb={6}>
         {/* 验证性能 */}
         <Box p={4} bg="white" borderRadius="md" border="1px" borderColor="gray.200" shadow="sm">
           <Text fontSize="lg" fontWeight="bold" mb={4}>验证性能</Text>
@@ -199,7 +209,11 @@ const SchemaMonitoring = () => {
                 <Text fontSize="sm">验证成功率</Text>
                 <Text fontSize="sm" fontWeight="bold">{formatPercentage(metrics.validation_success_rate)}</Text>
               </Flex>
-              <Progress value={metrics.validation_success_rate * 100} colorScheme="green" size="sm" />
+              <Progress.Root value={metrics.validation_success_rate * 100} colorPalette="green" size="sm">
+                <Progress.Track>
+                  <Progress.Range />
+                </Progress.Track>
+              </Progress.Root>
             </Box>
 
             <Box>
@@ -207,7 +221,11 @@ const SchemaMonitoring = () => {
                 <Text fontSize="sm">修复成功率</Text>
                 <Text fontSize="sm" fontWeight="bold">{formatPercentage(metrics.repair_success_rate)}</Text>
               </Flex>
-              <Progress value={metrics.repair_success_rate * 100} colorScheme="blue" size="sm" />
+              <Progress.Root value={metrics.repair_success_rate * 100} colorPalette="blue" size="sm">
+                <Progress.Track>
+                  <Progress.Range />
+                </Progress.Track>
+              </Progress.Root>
             </Box>
 
             <Box>
@@ -215,7 +233,11 @@ const SchemaMonitoring = () => {
                 <Text fontSize="sm">降级率</Text>
                 <Text fontSize="sm" fontWeight="bold">{formatPercentage(metrics.fallback_rate)}</Text>
               </Flex>
-              <Progress value={metrics.fallback_rate * 100} colorScheme="orange" size="sm" />
+              <Progress.Root value={metrics.fallback_rate * 100} colorPalette="orange" size="sm">
+                <Progress.Track>
+                  <Progress.Range />
+                </Progress.Track>
+              </Progress.Root>
             </Box>
           </VStack>
         </Box>
@@ -246,12 +268,12 @@ const SchemaMonitoring = () => {
             )}
           </VStack>
         </Box>
-      </Grid>
+      </Box>
 
       {/* 性能指标 */}
       <Box p={4} bg="white" borderRadius="md" border="1px" borderColor="gray.200" shadow="sm">
         <Text fontSize="lg" fontWeight="bold" mb={4}>性能指标</Text>
-        <Grid templateColumns={{ base: "1fr", md: "repeat(3, 1fr)" }} gap={4}>
+        <Box display="grid" gridTemplateColumns={{ base: "1fr", md: "repeat(3, 1fr)" }} gap={4}>
           <Box textAlign="center">
             <Text fontSize="sm" color="gray.600" mb={1}>平均验证耗时</Text>
             <Text fontSize="xl" fontWeight="bold" color="blue.600">
@@ -272,7 +294,7 @@ const SchemaMonitoring = () => {
               {formatTime(metrics.avg_total_time)}
             </Text>
           </Box>
-        </Grid>
+        </Box>
 
         {metrics.last_updated && (
           <Text fontSize="xs" color="gray.500" mt={3} textAlign="center">

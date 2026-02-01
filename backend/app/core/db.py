@@ -55,9 +55,9 @@ def create_db_engine():
         database_url,
         pool_pre_ping=True,          # 连接前检查（自动重连断开的连接）
         pool_recycle=1800,           # 连接回收时间（30分钟）
-        pool_timeout=20,             # 连接池超时（20秒）
-        pool_size=3,                 # 连接池大小
-        max_overflow=5,              # 最大溢出连接数
+        pool_timeout=60,             # 连接池超时（60秒，增加超时时间以应对高并发）
+        pool_size=15,                # 连接池大小（增加到15）
+        max_overflow=25,             # 最大溢出连接数（增加到25，总共最多40个连接）
         echo=False,                  # 关闭SQL日志
         connect_args=connect_args,
     )
@@ -73,7 +73,20 @@ def create_db_engine():
         """从连接池获取连接时检查连接有效性"""
         try:
             # 使用 pool_pre_ping 时，这里会自动检查连接
-            logger.debug("从连接池获取连接")
+            pool = engine.pool
+            logger.debug(
+                f"从连接池获取连接 - "
+                f"池大小: {pool.size()}, "
+                f"已检出: {pool.checkedout()}, "
+                f"已归还: {pool.checkedin()}, "
+                f"溢出: {pool.overflow()}"
+            )
+            # 如果连接池接近满载，记录警告
+            if pool.checkedout() > pool.size() * 0.8:
+                logger.warning(
+                    f"连接池使用率较高: {pool.checkedout()}/{pool.size() + pool.overflow()} "
+                    f"({pool.checkedout() * 100 / (pool.size() + pool.overflow()):.1f}%)"
+                )
         except Exception as e:
             logger.warning(f"连接检查失败，将自动重连: {e}")
             raise DisconnectionError("连接已断开，需要重连")
@@ -81,7 +94,13 @@ def create_db_engine():
     @event.listens_for(engine, "checkin")
     def receive_checkin(dbapi_conn, connection_record):
         """连接归还到连接池"""
-        logger.debug("连接已归还到连接池")
+        pool = engine.pool
+        logger.debug(
+            f"连接已归还到连接池 - "
+            f"池大小: {pool.size()}, "
+            f"已检出: {pool.checkedout()}, "
+            f"已归还: {pool.checkedin()}"
+        )
     
     @event.listens_for(engine, "invalidate")
     def receive_invalidate(dbapi_conn, connection_record, exception):

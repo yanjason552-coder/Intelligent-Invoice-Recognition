@@ -3,7 +3,6 @@ import { Box, Text, Flex, Grid, GridItem, HStack, VStack, Skeleton } from "@chak
 import { FiFileText, FiActivity, FiCheckCircle, FiXCircle, FiClock, FiTrendingUp, FiDollarSign, FiLayers } from "react-icons/fi"
 import { getApiUrl, getAuthHeaders } from '../../client/unifiedTypes'
 import LineChart from './LineChart'
-import SchemaMonitoring from './SchemaMonitoring'
 
 interface StatisticsData {
   overview: {
@@ -276,9 +275,6 @@ const Statistics = () => {
           title=""
         />
       </Box>
-
-      {/* Schema监控指标 */}
-      <SchemaMonitoring />
     </Box>
   )
 }

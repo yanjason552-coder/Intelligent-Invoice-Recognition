@@ -368,10 +368,27 @@ const RecognitionParamsModal = ({
                           <Text mb={1}><strong>准确率：</strong>{(selectedTemplate.accuracy * 100).toFixed(1)}%</Text>
                         )}
                         {selectedTemplate.default_schema_id && (
-                          <Text color="green.600" fontWeight="medium">
+                          <Text color="green.600" fontWeight="medium" mb={1}>
                             ✓ 已自动关联输出字段标准
                           </Text>
                         )}
+                        {(() => {
+                          // 检查 prompt 是否存在且不为空
+                          const hasPrompt = selectedTemplate.prompt && 
+                                           selectedTemplate.prompt !== null && 
+                                           selectedTemplate.prompt !== undefined && 
+                                           String(selectedTemplate.prompt).trim() !== ''
+                          console.log('选中模板 prompt 检查:', {
+                            prompt: selectedTemplate.prompt,
+                            hasPrompt,
+                            type: typeof selectedTemplate.prompt
+                          })
+                          return hasPrompt ? (
+                            <Text color="blue.600" fontWeight="medium">
+                              ✓ 已填充提示词
+                            </Text>
+                          ) : null
+                        })()}
                       </Box>
                     )
                   })()}

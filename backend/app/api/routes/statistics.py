@@ -8,7 +8,8 @@ from sqlmodel import select
 
 from fastapi import APIRouter, Depends, HTTPException
 from app.api.deps import SessionDep, CurrentUser
-from app.models.models_invoice import Invoice, InvoiceFile, RecognitionTask, Template
+from app.models.models_invoice import Invoice, InvoiceFile, RecognitionTask, RecognitionResult, Template, LLMConfig
+from uuid import UUID
 
 router = APIRouter(prefix="/statistics", tags=["statistics"])
 
@@ -246,4 +247,178 @@ def get_statistics_trends(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取趋势数据失败: {str(e)}")
+
+
+@router.get("/recognition-status")
+def get_recognition_status(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+) -> Any:
+    """
+    检查发票识别情况
+    """
+    try:
+        from uuid import UUID
+        
+        # 1. 识别任务状态统计
+        task_status_counts = {}
+        for status in ["pending", "processing", "completed", "failed"]:
+            count = session.exec(
+                select(func.count()).select_from(RecognitionTask)
+                .where(RecognitionTask.status == status)
+            ).one()
+            task_status_counts[status] = count
+        
+        total_tasks = sum(task_status_counts.values())
+        
+        # 2. 检查长时间处理中的任务（超过30分钟）
+        thirty_minutes_ago = datetime.now() - timedelta(minutes=30)
+        stuck_tasks_query = select(RecognitionTask).where(
+            and_(
+                RecognitionTask.status == "processing",
+                RecognitionTask.start_time < thirty_minutes_ago
+            )
+        ).order_by(RecognitionTask.start_time).limit(10)
+        stuck_tasks = session.exec(stuck_tasks_query).all()
+        
+        stuck_tasks_list = []
+        for task in stuck_tasks:
+            duration_minutes = (datetime.now() - task.start_time).total_seconds() / 60 if task.start_time else 0
+            stuck_tasks_list.append({
+                "id": str(task.id),
+                "task_no": task.task_no,
+                "start_time": task.start_time.isoformat() if task.start_time else None,
+                "duration_minutes": round(duration_minutes, 1),
+                "error_message": task.error_message
+            })
+        
+        # 3. 最近失败的任务
+        failed_tasks_query = select(RecognitionTask).where(
+            RecognitionTask.status == "failed"
+        ).order_by(RecognitionTask.create_time.desc()).limit(10)
+        failed_tasks = session.exec(failed_tasks_query).all()
+        
+        failed_tasks_list = []
+        for task in failed_tasks:
+            failed_tasks_list.append({
+                "id": str(task.id),
+                "task_no": task.task_no,
+                "create_time": task.create_time.isoformat() if task.create_time else None,
+                "error_code": task.error_code,
+                "error_message": task.error_message
+            })
+        
+        # 4. 识别结果统计
+        result_total = session.exec(
+            select(func.count()).select_from(RecognitionResult)
+        ).one()
+        
+        result_status_counts = {}
+        for status in ["success", "failed", "partial"]:
+            count = session.exec(
+                select(func.count()).select_from(RecognitionResult)
+                .where(RecognitionResult.status == status)
+            ).one()
+            result_status_counts[status] = count
+        
+        # 平均准确率和置信度
+        avg_accuracy_result = session.exec(
+            select(func.avg(RecognitionResult.accuracy))
+            .select_from(RecognitionResult)
+        ).one()
+        avg_accuracy = float(avg_accuracy_result) if avg_accuracy_result else None
+        
+        avg_confidence_result = session.exec(
+            select(func.avg(RecognitionResult.confidence))
+            .select_from(RecognitionResult)
+        ).one()
+        avg_confidence = float(avg_confidence_result) if avg_confidence_result else None
+        
+        # 5. 最近完成的识别任务
+        recent_completed_query = select(RecognitionTask).where(
+            RecognitionTask.status == "completed"
+        ).order_by(RecognitionTask.end_time.desc().nulls_last()).limit(5)
+        recent_completed = session.exec(recent_completed_query).all()
+        
+        recent_completed_list = []
+        for task in recent_completed:
+            duration = (task.end_time - task.start_time).total_seconds() if task.start_time and task.end_time else None
+            
+            # 获取识别结果
+            result = session.exec(
+                select(RecognitionResult).where(RecognitionResult.task_id == task.id)
+            ).first()
+            
+            task_info = {
+                "task_no": task.task_no,
+                "end_time": task.end_time.isoformat() if task.end_time else None,
+                "duration_seconds": round(duration, 2) if duration else None
+            }
+            
+            if result:
+                task_info.update({
+                    "accuracy": float(result.accuracy) if result.accuracy else None,
+                    "confidence": float(result.confidence) if result.confidence else None,
+                    "recognized_fields": result.recognized_fields,
+                    "total_fields": result.total_fields
+                })
+            
+            recent_completed_list.append(task_info)
+        
+        # 6. 模板提示词使用情况
+        all_tasks = session.exec(select(RecognitionTask)).all()
+        prompt_count = 0
+        for task in all_tasks:
+            if task.params and task.params.get("template_prompt"):
+                prompt_value = task.params.get("template_prompt")
+                if prompt_value and prompt_value != "null" and str(prompt_value).strip():
+                    prompt_count += 1
+        
+        # 7. 模型配置使用情况
+        model_usage = {}
+        for task in all_tasks:
+            if task.params and task.params.get("model_config_id"):
+                try:
+                    model_config = session.get(LLMConfig, UUID(task.params.get("model_config_id")))
+                    if model_config:
+                        model_name = model_config.name
+                        if model_name not in model_usage:
+                            model_usage[model_name] = {"total": 0, "completed": 0, "failed": 0}
+                        model_usage[model_name]["total"] += 1
+                        if task.status == "completed":
+                            model_usage[model_name]["completed"] += 1
+                        elif task.status == "failed":
+                            model_usage[model_name]["failed"] += 1
+                except Exception:
+                    pass
+        
+        return {
+            "task_status": {
+                "pending": task_status_counts.get("pending", 0),
+                "processing": task_status_counts.get("processing", 0),
+                "completed": task_status_counts.get("completed", 0),
+                "failed": task_status_counts.get("failed", 0),
+                "total": total_tasks
+            },
+            "stuck_tasks": stuck_tasks_list,
+            "failed_tasks": failed_tasks_list,
+            "result_status": {
+                "total": result_total,
+                "success": result_status_counts.get("success", 0),
+                "failed": result_status_counts.get("failed", 0),
+                "partial": result_status_counts.get("partial", 0),
+                "avg_accuracy": avg_accuracy,
+                "avg_confidence": avg_confidence
+            },
+            "recent_completed": recent_completed_list,
+            "prompt_usage": {
+                "tasks_with_prompt": prompt_count,
+                "total_tasks": total_tasks,
+                "usage_rate": prompt_count / total_tasks if total_tasks > 0 else 0
+            },
+            "model_usage": model_usage
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取识别情况失败: {str(e)}")
 

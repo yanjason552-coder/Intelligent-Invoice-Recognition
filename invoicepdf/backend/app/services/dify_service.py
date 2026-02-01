@@ -426,24 +426,56 @@ class SyntaxService:
             }
             logger.info(f"[步骤C3] 构建inputs，文件类型: {file_type_value}, external_file_id: {file.external_file_id}")
             
-            # 获取模板提示词（如果任务关联了模板）
+            # 获取模板提示词（优先从任务参数中获取，如果没有则从模板对象获取）
             template_prompt = None
-            if task.template_id:
-                try:
-                    from app.models.models_invoice import Template
-                    template = self.session.get(Template, task.template_id)
-                    if template and template.prompt:
-                        template_prompt = template.prompt
-                        logger.info(f"[步骤C3.1] 获取到模板提示词，模板ID: {task.template_id}, 提示词长度: {len(template_prompt)}")
-                    else:
-                        logger.info(f"[步骤C3.1] 模板不存在或未设置提示词，模板ID: {task.template_id}")
-                except Exception as e:
-                    logger.warning(f"[步骤C3.1] 获取模板提示词失败: {str(e)}，将继续执行")
+            template_id_for_prompt = None
+            
+            if task.params and task.params.get("template_prompt"):
+                template_prompt = task.params.get("template_prompt")
+                logger.info(f"[步骤C3.1] 从任务参数中获取到模板提示词，长度: {len(template_prompt)} 字符")
+            else:
+                # 后备方案：从模板对象获取
+                # 优先使用 task.template_id，如果没有则使用 task.params.template_id
+                if task.template_id:
+                    template_id_for_prompt = task.template_id
+                elif task.params and task.params.get("template_id"):
+                    template_id_for_prompt = task.params.get("template_id")
+                    logger.info(f"[步骤C3.1] task.template_id 为空，使用 params 中的 template_id: {template_id_for_prompt}")
+                
+                if template_id_for_prompt:
+                    try:
+                        from app.models.models_invoice import Template
+                        from uuid import UUID
+                        template = self.session.get(Template, UUID(template_id_for_prompt) if isinstance(template_id_for_prompt, str) else template_id_for_prompt)
+                        if template:
+                            try:
+                                template_prompt = getattr(template, 'prompt', None)
+                            except Exception:
+                                # 如果获取失败，尝试使用 SQL 查询
+                                try:
+                                    from sqlalchemy import text
+                                    result = self.session.execute(
+                                        text("SELECT prompt FROM template WHERE id = :id"),
+                                        {"id": str(template.id)}
+                                    ).fetchone()
+                                    if result:
+                                        template_prompt = result[0] if result[0] else None
+                                except Exception:
+                                    template_prompt = None
+                            
+                            if template_prompt:
+                                logger.info(f"[步骤C3.1] 从模板对象获取到模板提示词，模板ID: {template_id_for_prompt}, 提示词长度: {len(template_prompt)} 字符")
+                            else:
+                                logger.warning(f"[步骤C3.1] 模板存在但未设置提示词，模板ID: {template_id_for_prompt}")
+                        else:
+                            logger.warning(f"[步骤C3.1] 模板不存在，模板ID: {template_id_for_prompt}")
+                    except Exception as e:
+                        logger.warning(f"[步骤C3.1] 获取模板提示词失败: {str(e)}，将继续执行")
             
             # 如果存在模板提示词，添加到 inputs 中
             if template_prompt:
                 inputs["Input_Pro"] = template_prompt
-                logger.info(f"[步骤C3.2] 已将模板提示词添加到请求 inputs 中，字段名: Input_Pro")
+                logger.info(f"[步骤C3.2] 已将模板提示词添加到请求 inputs 中，字段名: Input_Pro，长度: {len(template_prompt)} 字符")
             
             # 如果存在 schema_definition，添加到 inputs 中
             # 根据模型配置名称判断使用哪个字段名

@@ -663,7 +663,17 @@ def get_recognition_config_options(
     """
     try:
         # 1. 获取模型配置列表（从 llm_config 表查询）
-        llm_configs_query = select(LLMConfig).where(LLMConfig.is_active == True)
+        # 优先返回默认模型，然后按名称排序
+        from sqlalchemy import case
+        llm_configs_query = select(LLMConfig).where(LLMConfig.is_active == True).order_by(
+            LLMConfig.is_default.desc(),  # 默认模型排在前面
+            case(
+                (LLMConfig.name.ilike('%v3_jsonschema%'), 0),
+                (LLMConfig.name.ilike('%jsonschema%'), 1),
+                else_=2
+            ),  # 包含 JsonSchema 的模型优先
+            LLMConfig.name  # 最后按名称排序
+        )
         llm_configs = session.exec(llm_configs_query).all()
         
         # 转换为模型配置格式
@@ -749,9 +759,46 @@ def get_recognition_config_options(
                 return ""
             return ver[1:] if ver.lower().startswith("v") else ver
 
+        # 批量获取所有模板的 prompt 字段（使用 SQL 查询，避免模型字段未加载的问题）
+        template_ids = [t.id for t in templates]
+        prompt_map = {}
+        if template_ids:
+            try:
+                from sqlalchemy import text
+                from sqlalchemy.dialects.postgresql import array
+                # 使用 PostgreSQL 数组参数
+                result = session.execute(
+                    text("SELECT id::text, prompt FROM template WHERE id = ANY(:ids)"),
+                    {"ids": array(template_ids)}
+                ).fetchall()
+                for row in result:
+                    template_id_str = str(row[0])
+                    prompt_map[template_id_str] = row[1] if row[1] else None
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"批量获取模板 prompt 字段失败: {str(e)}，将逐个查询")
+                # 如果批量查询失败，逐个查询
+                for template in templates:
+                    try:
+                        from sqlalchemy import text
+                        result = session.execute(
+                            text("SELECT prompt FROM template WHERE id = :id"),
+                            {"id": str(template.id)}
+                        ).fetchone()
+                        if result:
+                            prompt_map[str(template.id)] = result[0] if result[0] else None
+                        else:
+                            prompt_map[str(template.id)] = None
+                    except Exception:
+                        prompt_map[str(template.id)] = None
+        
         template_list = []
         for t in templates:
             v = versions_map.get(t.current_version_id) if t.current_version_id else None
+            # 从 prompt_map 中获取 prompt 值
+            prompt_value = prompt_map.get(str(t.id))
+            
             template_list.append(
                 {
                     "id": str(t.id),
@@ -765,6 +812,7 @@ def get_recognition_config_options(
                     "current_version": v.version if v else None,
                     "version": _strip_leading_v(v.version) if v else "",  # 保持向后兼容
                     "accuracy": t.accuracy,
+                    "prompt": prompt_value,  # 添加 prompt 字段
                 }
             )
         

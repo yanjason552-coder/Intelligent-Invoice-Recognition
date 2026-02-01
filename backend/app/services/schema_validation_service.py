@@ -11,7 +11,8 @@ from jsonschema import validate, ValidationError, Draft7Validator
 from pydantic import BaseModel, Field
 import uuid
 
-from app.core.db import SessionLocal
+from app.core.db import engine
+from sqlmodel import Session
 from app.models.models_invoice import OutputSchema, LLMConfig
 from sqlmodel import select
 
@@ -349,7 +350,7 @@ class SchemaValidationService:
     ) -> Optional[Dict[str, Any]]:
         """获取Schema定义"""
         try:
-            with SessionLocal() as session:
+            with Session(engine) as session:
                 if schema_id:
                     # 直接通过Schema ID获取
                     schema_obj = session.get(OutputSchema, schema_id)

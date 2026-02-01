@@ -10,7 +10,8 @@ from collections import defaultdict
 from pydantic import BaseModel, Field
 import json
 
-from app.core.db import SessionLocal
+from app.core.db import engine
+from sqlmodel import Session
 from app.models.models_invoice import LLMConfig, OutputSchema
 from sqlmodel import select, func
 
@@ -329,7 +330,7 @@ class SchemaMonitoringService:
     async def get_model_config_stats(self) -> Dict[str, Any]:
         """获取模型配置统计信息"""
         try:
-            with SessionLocal() as session:
+            with Session(engine) as session:
                 # 统计活跃的模型配置
                 active_configs = session.exec(
                     select(func.count(LLMConfig.id)).where(LLMConfig.is_active == True)
@@ -350,7 +351,6 @@ class SchemaMonitoringService:
                     select(func.count()).select_from(LLMConfig).where(
                         LLMConfig.is_active == True
                     ).where(False)  # 返回 0，因为 LLMConfig 没有 default_schema_id
-                    )
                 ).first()
 
                 return {

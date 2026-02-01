@@ -553,6 +553,8 @@ class InvoiceResponse(SQLModel):
     company_id: Optional[UUID] = None
     company_code: Optional[str] = None
     create_time: datetime
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 # 识别任务参数模型
@@ -698,11 +700,21 @@ class Template(SQLModel, table=True):
     # Schema关联
     default_schema_id: Optional[UUID] = Field(default=None, foreign_key="output_schema.id", description="默认输出结构标准ID")
     
+    # 提示词
+    prompt: Optional[str] = Field(default=None, sa_column=Column(Text), description="模板提示词，用于指导AI识别")
+    
+    # Schema JSON（新增）
+    schema: Optional[dict] = Field(default=None, sa_column=Column(JSON), description="模板 Schema JSON 定义")
+    
     # 版本管理
     current_version_id: Optional[UUID] = Field(default=None, foreign_key="template_version.id", description="当前版本ID")
     
     # 统计信息
     accuracy: Optional[float] = Field(default=None, sa_column=Column(Float), description="准确率（统计值）")
+    
+    # 示例文件
+    sample_file_path: Optional[str] = Field(default=None, max_length=500, description="示例文件路径")
+    sample_file_type: Optional[str] = Field(default=None, max_length=50, description="示例文件类型（pdf/jpg/png）")
     
     # 元数据
     creator_id: UUID = Field(foreign_key="user.id", description="创建人ID")

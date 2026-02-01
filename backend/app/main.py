@@ -1,12 +1,19 @@
 import sentry_sdk
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
+from pathlib import Path
 import asyncio
 import time
 
 from app.api.main import api_router
 from app.core.config import settings
+
+# 静态文件目录
+BACKEND_DIR = Path(__file__).parent.parent
+UPLOADS_DIR = BACKEND_DIR / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def custom_generate_unique_id(route: APIRoute) -> str:
@@ -177,3 +184,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
+# 添加静态文件服务，用于访问上传的文件
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")

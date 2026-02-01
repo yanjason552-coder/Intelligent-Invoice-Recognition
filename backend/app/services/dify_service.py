@@ -186,18 +186,55 @@ class SyntaxService:
             logger.info(f"用户ID: {user_id}")
             
             # 获取 output_schema 的 schema_definition（如果存在）
+            # 优先级：1. 任务参数中的 output_schema_id  2. 模板的 default_schema_id
             schema_definition = None
+            schema_id = None
+            
+            # 首先尝试从任务参数中获取
             if task.params and task.params.get("output_schema_id"):
                 schema_id = task.params.get("output_schema_id")
+                logger.info(f"从任务参数中获取到 output_schema_id: {schema_id}")
+            
+            # 如果任务参数中没有，尝试从模板中获取
+            if not schema_id:
+                template_id = None
+                # 优先使用 task.template_id，如果没有则使用 task.params.template_id
+                if task.template_id:
+                    template_id = task.template_id
+                elif task.params and task.params.get("template_id"):
+                    template_id = task.params.get("template_id")
+                    logger.info(f"从任务参数中获取到 template_id: {template_id}")
+                
+                if template_id:
+                    try:
+                        from app.models.models_invoice import Template
+                        template = self.session.get(Template, UUID(template_id) if isinstance(template_id, str) else template_id)
+                        if template and template.default_schema_id:
+                            schema_id = template.default_schema_id
+                            logger.info(f"从模板 {template.name} (ID: {template_id}) 中获取到 default_schema_id: {schema_id}")
+                        else:
+                            if template:
+                                logger.info(f"模板 {template.name} (ID: {template_id}) 没有设置 default_schema_id")
+                            else:
+                                logger.warning(f"模板不存在，ID: {template_id}")
+                    except Exception as e:
+                        logger.warning(f"获取模板信息失败: {str(e)}，将继续使用默认参数")
+            
+            # 使用 schema_id 获取 schema_definition
+            if schema_id:
                 try:
                     schema = self.session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
                     if schema and schema.schema_definition:
                         schema_definition = schema.schema_definition
-                        logger.info(f"获取到 Schema ID: {schema_id}")
+                        logger.info(f"成功获取到 Schema ID: {schema_id}")
                         logger.info(f"Schema 名称: {schema.name}")
                         logger.info(f"Schema 定义字段数: {len(schema.schema_definition) if isinstance(schema.schema_definition, dict) else 'N/A'}")
+                    else:
+                        logger.warning(f"Schema 不存在或没有 schema_definition，ID: {schema_id}")
                 except Exception as e:
                     logger.warning(f"获取 Schema 定义失败: {str(e)}，将继续使用默认参数")
+            else:
+                logger.info("未找到 output_schema_id（任务参数和模板中都没有），将使用默认参数")
             
             # 构建请求报文（使用external_file_id作为upload_file_id）
             endpoint_clean = endpoint.rstrip('/')
@@ -212,10 +249,100 @@ class SyntaxService:
                 }
             }
             
+            # 根据模型配置名称判断使用哪个字段名
+            config_name_lower = model_config.name.lower() if model_config.name else ""
+            schema_field_name = "JsonSchema" if "jsonschema" in config_name_lower else "OutputSchema"
+            
             # 如果存在 schema_definition，添加到 inputs 中
             if schema_definition:
-                inputs["OutputSchema"] = schema_definition
-                logger.info("已将 schema_definition 添加到请求 inputs 中")
+                # 如果字段名是JsonSchema，需要将schema转换为JSON字符串
+                if schema_field_name == "JsonSchema":
+                    if isinstance(schema_definition, dict):
+                        schema_value = json.dumps(schema_definition, ensure_ascii=False)
+                    elif isinstance(schema_definition, str):
+                        schema_value = schema_definition
+                    else:
+                        schema_value = json.dumps(schema_definition, ensure_ascii=False)
+                    inputs[schema_field_name] = schema_value
+                    logger.info(f"已将 schema_definition 添加到请求 inputs 中，字段名: {schema_field_name} (字符串格式)")
+                else:
+                    inputs[schema_field_name] = schema_definition
+                    logger.info(f"已将 schema_definition 添加到请求 inputs 中，字段名: {schema_field_name}")
+            else:
+                logger.info(f"未提供 schema_definition，使用默认参数")
+                # 如果配置名称包含JsonSchema但未提供schema，记录警告
+                if "jsonschema" in config_name_lower:
+                    logger.warning(f"配置 {model_config.name} 可能需要 JsonSchema，但未提供，这可能导致API调用失败")
+            
+            # 获取模板提示词（优先从任务参数中获取，如果没有则从模板对象获取）
+            template_prompt = None
+            template_id_for_prompt = None
+            
+            if task.params and task.params.get("template_prompt"):
+                template_prompt = task.params.get("template_prompt")
+                logger.info(f"[步骤C3.1] 从任务参数中获取到模板提示词，长度: {len(template_prompt)} 字符")
+            else:
+                # 后备方案：从模板对象获取
+                # 优先使用 task.template_id，如果没有则使用 task.params.template_id
+                if task.template_id:
+                    template_id_for_prompt = task.template_id
+                elif task.params and task.params.get("template_id"):
+                    template_id_for_prompt = task.params.get("template_id")
+                    logger.info(f"[步骤C3.1] task.template_id 为空，使用 params 中的 template_id: {template_id_for_prompt}")
+                
+                if template_id_for_prompt:
+                    try:
+                        from app.models.models_invoice import Template
+                        from uuid import UUID
+                        template = self.session.get(Template, UUID(template_id_for_prompt) if isinstance(template_id_for_prompt, str) else template_id_for_prompt)
+                        if template:
+                            try:
+                                template_prompt = getattr(template, 'prompt', None)
+                                # 确保 prompt 是字符串类型
+                                if template_prompt is not None:
+                                    template_prompt = str(template_prompt)
+                                    logger.info(f"[步骤C3.1] 从模板对象获取到模板提示词，模板ID: {template_id_for_prompt}, 提示词类型: {type(template_prompt)}, 长度: {len(template_prompt)} 字符")
+                                    # 记录提示词的前100个字符用于调试
+                                    logger.info(f"[步骤C3.1] 提示词预览（前100字符）: {template_prompt[:100]}...")
+                            except Exception as e:
+                                logger.warning(f"[步骤C3.1] 使用 getattr 获取 prompt 失败: {str(e)}，尝试使用 SQL 查询")
+                                # 如果获取失败，尝试使用 SQL 查询
+                                try:
+                                    from sqlalchemy import text
+                                    result = self.session.execute(
+                                        text("SELECT prompt FROM template WHERE id = :id"),
+                                        {"id": str(template.id)}
+                                    ).fetchone()
+                                    if result and result[0]:
+                                        template_prompt = str(result[0])
+                                        logger.info(f"[步骤C3.1] 通过SQL查询获取到模板提示词，长度: {len(template_prompt)} 字符")
+                                    else:
+                                        template_prompt = None
+                                except Exception as sql_e:
+                                    logger.warning(f"[步骤C3.1] SQL查询 prompt 失败: {str(sql_e)}")
+                                    template_prompt = None
+                            
+                            if template_prompt:
+                                logger.info(f"[步骤C3.1] ✅ 成功获取模板提示词，模板ID: {template_id_for_prompt}, 提示词长度: {len(template_prompt)} 字符")
+                            else:
+                                logger.warning(f"[步骤C3.1] 模板存在但未设置提示词，模板ID: {template_id_for_prompt}")
+                        else:
+                            logger.warning(f"[步骤C3.1] 模板不存在，模板ID: {template_id_for_prompt}")
+                    except Exception as e:
+                        logger.warning(f"[步骤C3.1] 获取模板提示词失败: {str(e)}，将继续执行")
+            
+            # 如果存在模板提示词，添加到 inputs 中作为 Input_Pro
+            if template_prompt:
+                # 确保 template_prompt 是字符串类型
+                template_prompt_str = str(template_prompt) if template_prompt is not None else None
+                if template_prompt_str:
+                    inputs["Input_Pro"] = template_prompt_str
+                    logger.info(f"✅ 已将模板提示词添加到请求 inputs 中作为 Input_Pro，长度: {len(template_prompt_str)} 字符")
+                    logger.info(f"✅ Input_Pro 值预览（前200字符）: {template_prompt_str[:200]}...")
+                else:
+                    logger.warning("模板提示词为空字符串，未添加到 inputs 中")
+            else:
+                logger.info("未获取到模板提示词，Input_Pro 字段将不会添加到请求中")
             
             payload = {
                 "inputs": inputs,
@@ -263,10 +390,18 @@ class SyntaxService:
                         try:
                             error_body = response.json()
                             logger.error(f"错误响应体: {json.dumps(error_body, ensure_ascii=False, indent=2)}")
-                            error_message = error_body.get("message") or error_body.get("error") or f"HTTP错误: {status_code}"
+                            # 尝试从多个可能的字段提取错误消息
+                            error_message = (
+                                error_body.get("message") or 
+                                error_body.get("error") or 
+                                error_body.get("detail") or
+                                error_body.get("msg") or
+                                (error_body.get("errors", [{}])[0].get("message") if isinstance(error_body.get("errors"), list) and error_body.get("errors") else None) or
+                                f"HTTP错误: {status_code}"
+                            )
                         except:
                             logger.error(f"错误响应文本: {response.text[:1000]}")
-                            error_message = f"HTTP错误: {status_code}"
+                            error_message = response.text[:500] if response.text else f"HTTP错误: {status_code}"
                         logger.error("=" * 80)
                         
                         # 根据状态码返回相应的错误信息

@@ -180,15 +180,34 @@ const InvoiceRecognitionList = () => {
       return
     }
 
-    // 过滤出待处理的记录
-    const pendingRows = selectedRows.filter((row: any) => row.status === 'pending')
-    if (pendingRows.length === 0) {
-      showErrorToast('所选记录中没有待处理的记录')
+    // 过滤出可重新识别的记录：pending + failed（processing/completed 不允许重复启动）
+    // 添加调试日志
+    console.log('批量启动 - 选中的记录状态:', selectedRows.map((r: any) => ({
+      id: r.id,
+      status: r.status,
+      recognition_status: r.recognition_status,
+      fileId: r.fileId
+    })))
+    
+    const runnableRows = selectedRows.filter((row: any) => {
+      // 检查 status 字段（来自 recognition_status）
+      const status = row.status || row.recognition_status || 'unknown'
+      const isRunnable = status === 'pending' || status === 'failed'
+      console.log(`记录 ${row.id}: status=${status}, isRunnable=${isRunnable}`)
+      return isRunnable
+    })
+    
+    console.log(`批量启动 - 可启动的记录数: ${runnableRows.length}/${selectedRows.length}`)
+    
+    if (runnableRows.length === 0) {
+      const statuses = selectedRows.map((r: any) => r?.status || r?.recognition_status || 'unknown')
+      const uniqueStatuses = [...new Set(statuses)]
+      showErrorToast(`所选记录中没有可启动的记录（仅支持：待处理/失败）。当前状态: ${uniqueStatuses.join(', ')}`)
       return
     }
 
     // 提取文件ID，确保每个ID都存在且有效
-    const fileIds = pendingRows
+    const fileIds = runnableRows
       .map((row: any) => row.fileId)
       .filter((id: string) => id && id.trim() !== '')
 

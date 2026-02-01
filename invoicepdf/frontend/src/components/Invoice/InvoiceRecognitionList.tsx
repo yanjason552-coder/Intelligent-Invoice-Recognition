@@ -261,9 +261,28 @@ const InvoiceRecognitionList = () => {
     }
 
     // 过滤出可重新识别的记录：pending + failed（processing/completed 不允许重复启动）
-    const runnableRows = selectedRows.filter((row: any) => row.status === 'pending' || row.status === 'failed')
+    // 添加调试日志
+    console.log('批量启动 - 选中的记录状态:', selectedRows.map((r: any) => ({
+      id: r.id,
+      status: r.status,
+      recognition_status: r.recognition_status,
+      fileId: r.fileId
+    })))
+    
+    const runnableRows = selectedRows.filter((row: any) => {
+      // 检查 status 字段（来自 recognition_status）
+      const status = row.status || row.recognition_status || 'unknown'
+      const isRunnable = status === 'pending' || status === 'failed'
+      console.log(`记录 ${row.id}: status=${status}, isRunnable=${isRunnable}`)
+      return isRunnable
+    })
+    
+    console.log(`批量启动 - 可启动的记录数: ${runnableRows.length}/${selectedRows.length}`)
+    
     if (runnableRows.length === 0) {
-      showErrorToast('所选记录中没有可启动的记录（仅支持：待处理/失败）')
+      const statuses = selectedRows.map((r: any) => r?.status || r?.recognition_status || 'unknown')
+      const uniqueStatuses = [...new Set(statuses)]
+      showErrorToast(`所选记录中没有可启动的记录（仅支持：待处理/失败）。当前状态: ${uniqueStatuses.join(', ')}`)
       postDebugLog({
         runId: 'pre-run',
         hypothesisId: 'H8',
@@ -271,7 +290,8 @@ const InvoiceRecognitionList = () => {
         message: 'no runnable rows; batch start blocked',
         data: {
           selectedCount: selectedRows.length,
-          selectedStatuses: selectedRows.map((r: any) => r?.status || 'unknown').slice(0, 20),
+          selectedStatuses: statuses.slice(0, 20),
+          uniqueStatuses: uniqueStatuses,
         }
       })
       return

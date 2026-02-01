@@ -497,13 +497,52 @@ def create_recognition_task(
         if task_in.params.recognition_mode not in model_config.allowed_modes:
             raise HTTPException(status_code=400, detail=f"识别方式 {task_in.params.recognition_mode} 不在允许列表中")
         
-        # 模板策略处理（模板功能已废弃，template_id 设为 None）
+        # 模板策略处理
         template_id = None
+        template_prompt = None
+        logger.info(f"模板策略: {task_in.params.template_strategy}, template_id: {task_in.params.template_id}")
         if task_in.params.template_strategy == "fixed":
-            # 模板功能已废弃，忽略 template_id
-            logger.warning("模板策略 'fixed' 已废弃，将忽略 template_id")
+            # 用户指定模板，获取模板的 prompt
+            if task_in.params.template_id:
+                # 确保 template_id 是 UUID 类型
+                from uuid import UUID
+                if isinstance(task_in.params.template_id, str):
+                    template_id = UUID(task_in.params.template_id)
+                else:
+                    template_id = task_in.params.template_id
+                
+                logger.info(f"设置 template_id: {template_id} (类型: {type(template_id)})")
+                from app.models.models_invoice import Template
+                try:
+                    template = session.get(Template, template_id)
+                    if template:
+                        # 安全获取 prompt 字段
+                        try:
+                            template_prompt = getattr(template, 'prompt', None)
+                        except Exception:
+                            # 如果获取失败，尝试使用 SQL 查询
+                            try:
+                                from sqlalchemy import text
+                                result = session.execute(
+                                    text("SELECT prompt FROM template WHERE id = :id"),
+                                    {"id": str(template.id)}
+                                ).fetchone()
+                                if result:
+                                    template_prompt = result[0] if result[0] else None
+                            except Exception as e:
+                                logger.warning(f"通过SQL查询模板prompt失败: {str(e)}")
+                                template_prompt = None
+                        
+                        if template_prompt:
+                            logger.info(f"获取到模板提示词，长度: {len(template_prompt)} 字符")
+                        else:
+                            logger.warning(f"模板 {template_id} 没有设置 prompt 字段")
+                    else:
+                        logger.warning(f"模板 {template_id} 不存在，但会使用 params 中的 template_id")
+                except Exception as e:
+                    logger.error(f"查询模板失败: {str(e)}，但会使用 params 中的 template_id")
         elif task_in.params.template_strategy == "auto":
-            # 模板功能已废弃，不再使用票据关联的模板
+            # 自动匹配模板（暂时不支持）
             template_id = None
         
         # 验证输出结构标准（如果提供）
@@ -516,6 +555,7 @@ def create_recognition_task(
         task_no = f"TASK-{datetime.now().strftime('%Y%m%d%H%M%S')}-{str(uuid4())[:8]}"
         
         # 构建参数快照（将UUID转换为字符串以便JSON序列化）
+        # 如果获取到模板提示词，添加到参数中
         params_dict = task_in.params.model_dump()
         # 将UUID对象转换为字符串
         def convert_uuid_to_str(obj):
@@ -530,21 +570,34 @@ def create_recognition_task(
                 return obj
         
         params_dict = convert_uuid_to_str(params_dict)
+        # 如果获取到模板提示词，添加到参数中
+        if template_prompt:
+            params_dict["template_prompt"] = template_prompt
         
         # 创建任务
-        task = RecognitionTask(
-            task_no=task_no,
-            invoice_id=task_in.invoice_id,
-            template_id=template_id,
-            params=params_dict,
-            priority=task_in.priority,
-            operator_id=current_user.id,
-            status="pending",
-            provider="dify"
-        )
-        session.add(task)
-        session.commit()
-        session.refresh(task)
+        logger.info(f"创建任务，template_id: {template_id} (类型: {type(template_id)})")
+        logger.info(f"创建任务前，template_id 值: {template_id}, 是否为 None: {template_id is None}")
+        try:
+            task = RecognitionTask(
+                task_no=task_no,
+                invoice_id=task_in.invoice_id,
+                template_id=template_id,
+                params=params_dict,
+                priority=task_in.priority,
+                operator_id=current_user.id,
+                status="pending",
+                provider="dify"
+            )
+            logger.info(f"任务对象创建完成，task.template_id: {task.template_id}")
+            session.add(task)
+            logger.info(f"任务已添加到session，准备提交")
+            session.commit()
+            logger.info(f"任务已提交到数据库")
+            session.refresh(task)
+            logger.info(f"任务刷新完成，task.template_id: {task.template_id}")
+        except Exception as e:
+            logger.error(f"创建任务时出错: {str(e)}", exc_info=True)
+            raise
         
         # 获取模型名称用于响应
         model_name = model_config.model_name
@@ -842,18 +895,74 @@ async def batch_create_recognition_tasks(
             else:
                 return obj
         
+        # 模板策略处理（批量任务也支持模板）
+        template_id = None
+        template_prompt = None
+        logger.info(f"批量任务 - 模板策略: {batch_in.params.template_strategy}, template_id: {batch_in.params.template_id}")
+        if batch_in.params.template_strategy == "fixed":
+            # 用户指定模板，获取模板的 prompt
+            if batch_in.params.template_id:
+                # 确保 template_id 是 UUID 类型
+                from uuid import UUID
+                if isinstance(batch_in.params.template_id, str):
+                    template_id = UUID(batch_in.params.template_id)
+                else:
+                    template_id = batch_in.params.template_id
+                
+                logger.info(f"批量任务 - 设置 template_id: {template_id} (类型: {type(template_id)})")
+                from app.models.models_invoice import Template
+                try:
+                    template = session.get(Template, template_id)
+                    if template:
+                        # 安全获取 prompt 字段
+                        template_prompt = None
+                        try:
+                            # 首先尝试直接获取
+                            template_prompt = getattr(template, 'prompt', None)
+                            logger.info(f"批量任务 - getattr获取prompt结果: {template_prompt is not None}, 值长度: {len(template_prompt) if template_prompt else 0}")
+                        except Exception as e:
+                            logger.warning(f"批量任务 - getattr获取prompt失败: {str(e)}")
+                        
+                        # 如果 getattr 返回 None 或空字符串，尝试使用 SQL 查询
+                        if not template_prompt:
+                            try:
+                                from sqlalchemy import text
+                                logger.info(f"批量任务 - 尝试通过SQL查询模板prompt")
+                                result = session.execute(
+                                    text("SELECT prompt FROM template WHERE id = :id"),
+                                    {"id": str(template.id)}
+                                ).fetchone()
+                                if result and result[0]:
+                                    template_prompt = result[0]
+                                    logger.info(f"批量任务 - SQL查询成功获取prompt，长度: {len(template_prompt)} 字符")
+                                else:
+                                    logger.warning(f"批量任务 - SQL查询返回空结果")
+                            except Exception as e:
+                                logger.warning(f"批量任务 - 通过SQL查询模板prompt失败: {str(e)}")
+                        
+                        if template_prompt:
+                            logger.info(f"批量任务 - 最终获取到模板提示词，长度: {len(template_prompt)} 字符")
+                        else:
+                            logger.warning(f"批量任务 - 模板 {template_id} 没有设置 prompt 字段")
+                    else:
+                        logger.warning(f"批量任务 - 模板 {template_id} 不存在，但会使用 params 中的 template_id")
+                except Exception as e:
+                    logger.error(f"批量任务 - 查询模板失败: {str(e)}，但会使用 params 中的 template_id")
+        
+        # 如果获取到模板提示词，添加到参数中
+        if template_prompt:
+            params_dict["template_prompt"] = template_prompt
+        
         params_dict = convert_uuid_to_str(params_dict)
         logger.info(f"转换后的参数字典: {json.dumps(params_dict, ensure_ascii=False, indent=2)}")
         
         # 批量创建任务
         created_tasks = []
         for invoice in invoices:
-            # 模板策略处理（模板功能已废弃）
-            template_id = None
-            
             # 生成任务编号
             task_no = f"TASK-{datetime.now().strftime('%Y%m%d%H%M%S')}-{str(uuid4())[:8]}"
             
+            logger.info(f"批量任务 - 创建任务，template_id: {template_id} (类型: {type(template_id)})")
             task = RecognitionTask(
                 task_no=task_no,
                 invoice_id=invoice.id,

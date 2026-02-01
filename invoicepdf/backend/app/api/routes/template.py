@@ -84,6 +84,12 @@ def list_templates(
         count_stmt = count_stmt.where(and_(*conditions))
     total = session.exec(count_stmt).one()
 
+    # 使用options排除schema字段（如果模型中有定义但数据库中没有）
+    from sqlalchemy.orm import defer
+    if hasattr(Template, 'schema'):
+        # 如果模型中有schema字段，但数据库中没有，则排除它
+        statement = statement.options(defer(Template.schema))
+    
     templates = session.exec(
         statement.order_by(Template.create_time.desc()).offset(skip).limit(limit)
     ).all()
@@ -115,6 +121,215 @@ def list_templates(
         )
 
     return {"data": data, "count": int(total), "skip": skip, "limit": limit}
+
+
+@router.put("/{template_id}", response_model=Message)
+def update_template(
+    *,
+    session: SessionDep,
+    template_id: UUID,
+    current_user: CurrentUser,
+    body: dict = Body(default_factory=dict),
+) -> Any:
+    template = session.get(Template, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="模板不存在")
+
+    payload = body or {}
+    print(f"[DEBUG] 收到更新请求，payload keys: {list(payload.keys())}")
+    print(f"[DEBUG] payload中的prompt值: {payload.get('prompt', 'NOT_FOUND')}")
+    
+    if "name" in payload:
+        name = _normalize_str(payload.get("name"))
+        if not name:
+            raise HTTPException(status_code=400, detail="模板名称不能为空")
+        template.name = name
+    if "template_type" in payload:
+        template.template_type = _normalize_str(payload.get("template_type")) or "其他"
+    if "description" in payload:
+        template.description = payload.get("description")
+    # 处理提示词：总是更新（包括空字符串），确保能清空提示词
+    # 注意：这个处理必须在字段更新之前，避免被覆盖
+    if "prompt" in payload:
+        prompt_value = payload.get("prompt")
+        # 允许空字符串，确保能清空提示词
+        template.prompt = prompt_value if prompt_value is not None else None
+        print(f"[DEBUG] 设置 template.prompt = '{prompt_value}', 类型: {type(prompt_value)}")
+        print(f"[DEBUG] 设置后检查 template.prompt = '{template.prompt}'")
+    elif "prompt" not in payload:
+        print(f"[DEBUG] 请求中没有 prompt 字段，payload keys: {list(payload.keys())}")
+    if "status" in payload:
+        template.status = _safe_template_status(payload.get("status"))
+    
+    # 处理 schema_id 字段（前端可能发送 schema_id，需要映射到 default_schema_id）
+    if "schema_id" in payload:
+        schema_id = payload.get("schema_id")
+        if schema_id:
+            # 验证 schema 是否存在
+            from app.models.models_invoice import OutputSchema
+            schema = session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
+            if not schema:
+                raise HTTPException(status_code=400, detail="Schema不存在")
+            template.default_schema_id = schema.id
+        else:
+            template.default_schema_id = None
+    elif "default_schema_id" in payload:
+        schema_id = payload.get("default_schema_id")
+        if schema_id:
+            from app.models.models_invoice import OutputSchema
+            schema = session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
+            if not schema:
+                raise HTTPException(status_code=400, detail="Schema不存在")
+            template.default_schema_id = schema.id
+        else:
+            template.default_schema_id = None
+
+    # 处理字段更新
+    if "fields" in payload:
+        fields_payload = payload.get("fields", [])
+        if fields_payload:
+            # 获取当前版本
+            version = None
+            if template.current_version_id:
+                version = session.get(TemplateVersion, template.current_version_id)
+            
+            if not version:
+                # 如果没有版本，创建一个新版本
+                version = TemplateVersion(
+                    id=uuid4(),
+                    template_id=template.id,
+                    version="v1.0.0",
+                    status="draft",
+                    schema_snapshot=None,
+                    accuracy=None,
+                    etag=None,
+                    locked_by=None,
+                    locked_at=None,
+                    created_by=current_user.id,
+                    created_at=datetime.now(),
+                    published_at=None,
+                    deprecated_at=None,
+                )
+                session.add(version)
+                session.flush()
+                template.current_version_id = version.id
+            
+            # 删除旧字段（保留已存在的字段，更新或新增）
+            existing_field_ids = {UUID(f.get("id")) for f in fields_payload if f.get("id")}
+            if existing_field_ids:
+                # 只删除不在新字段列表中的字段
+                old_fields = session.exec(
+                    select(TemplateField)
+                    .where(TemplateField.template_version_id == version.id)
+                ).all()
+                for old_field in old_fields:
+                    if old_field.id not in existing_field_ids:
+                        session.delete(old_field)
+            
+            # 更新或创建字段
+            for i, f in enumerate(fields_payload):
+                fk = _normalize_str(f.get("field_key"))
+                fn = _normalize_str(f.get("field_name"))
+                if not fk or not fn:
+                    continue
+                
+                field_id = None
+                if f.get("id"):
+                    try:
+                        field_id = UUID(f.get("id")) if isinstance(f.get("id"), str) else f.get("id")
+                    except Exception:
+                        pass
+                
+                if field_id:
+                    # 更新现有字段
+                    existing_field = session.get(TemplateField, field_id)
+                    if existing_field and existing_field.template_version_id == version.id:
+                        existing_field.field_key = fk
+                        existing_field.field_name = fn
+                        existing_field.data_type = _safe_data_type(_normalize_str(f.get("data_type")))
+                        existing_field.is_required = _normalize_bool(f.get("is_required"))
+                        existing_field.description = f.get("description")
+                        existing_field.example = f.get("example")
+                        existing_field.validation = f.get("validation")
+                        existing_field.normalize = f.get("normalize")
+                        existing_field.prompt_hint = f.get("prompt_hint")
+                        existing_field.confidence_threshold = f.get("confidence_threshold")
+                        sort_order = f.get("sort_order")
+                        try:
+                            existing_field.sort_order = int(sort_order) if sort_order is not None else i
+                        except Exception:
+                            existing_field.sort_order = i
+                        session.add(existing_field)
+                        continue
+                
+                # 创建新字段
+                dt = _safe_data_type(_normalize_str(f.get("data_type")))
+                is_req = _normalize_bool(f.get("is_required"))
+                sort_order = f.get("sort_order")
+                try:
+                    sort_order_int = int(sort_order) if sort_order is not None else i
+                except Exception:
+                    sort_order_int = i
+                
+                new_field = TemplateField(
+                    id=uuid4(),
+                    template_id=template.id,
+                    template_version_id=version.id,
+                    field_key=fk,
+                    field_name=fn,
+                    data_type=dt,
+                    is_required=is_req,
+                    required=is_req,
+                    default_value=None,
+                    description=f.get("description"),
+                    example=f.get("example"),
+                    validation=f.get("validation"),
+                    validation_rules=None,
+                    normalize=f.get("normalize"),
+                    prompt_hint=f.get("prompt_hint"),
+                    confidence_threshold=f.get("confidence_threshold"),
+                    canonical_field=None,
+                    parent_field_id=None,
+                    deprecated=False,
+                    deprecated_at=None,
+                    position=None,
+                    display_order=None,
+                    sort_order=sort_order_int,
+                    remark=None,
+                    create_time=datetime.now(),
+                )
+                session.add(new_field)
+
+    template.update_time = datetime.now()
+    
+    # 调试：检查prompt字段是否被设置（在字段更新之后再次检查）
+    print(f"[DEBUG] 字段更新后，保存前检查 - template.prompt = '{getattr(template, 'prompt', 'ATTRIBUTE_NOT_FOUND')}'")
+    print(f"[DEBUG] 保存前检查 - hasattr(template, 'prompt') = {hasattr(template, 'prompt')}")
+    
+    # 确保prompt字段被正确设置（防止被字段更新逻辑覆盖）
+    if "prompt" in payload:
+        prompt_value = payload.get("prompt")
+        template.prompt = prompt_value if prompt_value is not None else None
+        print(f"[DEBUG] 最终确认设置 template.prompt = '{template.prompt}'")
+    
+    session.add(template)
+    try:
+        session.commit()
+        session.refresh(template)
+        print(f"[DEBUG] 保存后检查 - template.prompt = '{getattr(template, 'prompt', 'ATTRIBUTE_NOT_FOUND')}'")
+        
+        # 直接从数据库查询验证
+        verify_template = session.exec(select(Template).where(Template.id == template_id)).first()
+        if verify_template:
+            print(f"[DEBUG] 数据库验证 - verify_template.prompt = '{getattr(verify_template, 'prompt', 'ATTRIBUTE_NOT_FOUND')}'")
+    except Exception as e:
+        print(f"[ERROR] 保存模板失败: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"保存模板失败: {str(e)}")
+    
+    return Message(message="模板更新成功")
 
 
 @router.get("/{template_id}")
@@ -348,100 +563,7 @@ def get_template_fields_by_version(
     }
 
 
-@router.post("")
-@router.post("/")
-def create_template(
-    *,
-    session: SessionDep,
-    current_user: CurrentUser,
-    body: dict = Body(default_factory=dict),
-) -> Any:
-    """
-    创建模板（最小实现）
-    前端依赖返回：{ data: { template_id } }
-    """
-    payload = body or {}
-    name = _normalize_str(payload.get("name"))
-    template_type = _normalize_str(payload.get("template_type")) or "其他"
-    description = payload.get("description")
-    status = _safe_template_status(payload.get("status"))
-    prompt = payload.get("prompt")  # 提示词
-    if not name:
-        raise HTTPException(status_code=400, detail="模板名称不能为空")
-
-    # 处理 schema_id 字段
-    default_schema_id = None
-    if "schema_id" in payload:
-        schema_id = payload.get("schema_id")
-        if schema_id:
-            from app.models.models_invoice import OutputSchema
-            schema = session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
-            if not schema:
-                raise HTTPException(status_code=400, detail="Schema不存在")
-            default_schema_id = schema.id
-    elif "default_schema_id" in payload:
-        schema_id = payload.get("default_schema_id")
-        if schema_id:
-            from app.models.models_invoice import OutputSchema
-            schema = session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
-            if not schema:
-                raise HTTPException(status_code=400, detail="Schema不存在")
-            default_schema_id = schema.id
-
-    now = datetime.now()
-    template = Template(
-        id=uuid4(),
-        name=name,
-        template_type=template_type,
-        description=description,
-        status=status,
-        default_schema_id=default_schema_id,
-        prompt=prompt,
-        # 注意：current_version_id 有外键约束指向 template_version.id，
-        # 不能在首次 INSERT template 时就赋值一个尚不存在的版本ID，否则会触发 FK violation。
-        # 这里先插入 template（current_version_id = NULL），再插入 version，最后回写 current_version_id。
-        current_version_id=None,
-        creator_id=current_user.id,
-        create_time=now,
-        update_time=None,
-    )
-    session.add(template)
-    session.flush()
-
-    version = TemplateVersion(
-        id=uuid4(),
-        template_id=template.id,
-        version="v1.0.0",
-        status="draft",
-        schema_snapshot=None,
-        accuracy=None,
-        etag=None,
-        locked_by=None,
-        locked_at=None,
-        created_by=current_user.id,
-        created_at=now,
-        published_at=None,
-        deprecated_at=None,
-    )
-    session.add(version)
-    session.flush()
-
-    template.current_version_id = version.id
-    session.add(template)
-    session.commit()
-
-    return {
-        "message": "模板创建成功",
-        "data": {
-            "template_id": str(template.id),
-            "template_name": template.name,
-            "version_id": str(version.id),
-            "version": version.version,
-        },
-    }
-
-
-@router.put("/{template_id}")
+@router.put("/{template_id}", response_model=Message)
 def update_template(
     *,
     session: SessionDep,
@@ -648,6 +770,99 @@ def update_template(
         raise HTTPException(status_code=500, detail=f"保存模板失败: {str(e)}")
     
     return Message(message="模板更新成功")
+
+
+@router.post("")
+@router.post("/")
+def create_template(
+    *,
+    session: SessionDep,
+    current_user: CurrentUser,
+    body: dict = Body(default_factory=dict),
+) -> Any:
+    """
+    创建模板（最小实现）
+    前端依赖返回：{ data: { template_id } }
+    """
+    payload = body or {}
+    name = _normalize_str(payload.get("name"))
+    template_type = _normalize_str(payload.get("template_type")) or "其他"
+    description = payload.get("description")
+    status = _safe_template_status(payload.get("status"))
+    prompt = payload.get("prompt")  # 提示词
+    if not name:
+        raise HTTPException(status_code=400, detail="模板名称不能为空")
+
+    # 处理 schema_id 字段
+    default_schema_id = None
+    if "schema_id" in payload:
+        schema_id = payload.get("schema_id")
+        if schema_id:
+            from app.models.models_invoice import OutputSchema
+            schema = session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
+            if not schema:
+                raise HTTPException(status_code=400, detail="Schema不存在")
+            default_schema_id = schema.id
+    elif "default_schema_id" in payload:
+        schema_id = payload.get("default_schema_id")
+        if schema_id:
+            from app.models.models_invoice import OutputSchema
+            schema = session.get(OutputSchema, UUID(schema_id) if isinstance(schema_id, str) else schema_id)
+            if not schema:
+                raise HTTPException(status_code=400, detail="Schema不存在")
+            default_schema_id = schema.id
+
+    now = datetime.now()
+    template = Template(
+        id=uuid4(),
+        name=name,
+        template_type=template_type,
+        description=description,
+        status=status,
+        default_schema_id=default_schema_id,
+        prompt=prompt,
+        # 注意：current_version_id 有外键约束指向 template_version.id，
+        # 不能在首次 INSERT template 时就赋值一个尚不存在的版本ID，否则会触发 FK violation。
+        # 这里先插入 template（current_version_id = NULL），再插入 version，最后回写 current_version_id。
+        current_version_id=None,
+        creator_id=current_user.id,
+        create_time=now,
+        update_time=None,
+    )
+    session.add(template)
+    session.flush()
+
+    version = TemplateVersion(
+        id=uuid4(),
+        template_id=template.id,
+        version="v1.0.0",
+        status="draft",
+        schema_snapshot=None,
+        accuracy=None,
+        etag=None,
+        locked_by=None,
+        locked_at=None,
+        created_by=current_user.id,
+        created_at=now,
+        published_at=None,
+        deprecated_at=None,
+    )
+    session.add(version)
+    session.flush()
+
+    template.current_version_id = version.id
+    session.add(template)
+    session.commit()
+
+    return {
+        "message": "模板创建成功",
+        "data": {
+            "template_id": str(template.id),
+            "template_name": template.name,
+            "version_id": str(version.id),
+            "version": version.version,
+        },
+    }
 
 
 @router.delete("/{template_id}", response_model=Message)

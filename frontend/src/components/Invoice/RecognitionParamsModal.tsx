@@ -349,6 +349,22 @@ const RecognitionParamsModal = ({
                   {params.template_id && (() => {
                     const selectedTemplate = configOptions?.templates.find(t => t.id === params.template_id)
                     if (!selectedTemplate) return null
+                    
+                    // 调试信息：检查 prompt 字段
+                    console.log('选中模板:', selectedTemplate)
+                    console.log('模板 prompt 值:', selectedTemplate.prompt)
+                    console.log('prompt 类型:', typeof selectedTemplate.prompt)
+                    console.log('prompt 是否为空字符串:', selectedTemplate.prompt === '')
+                    console.log('prompt 是否为 null:', selectedTemplate.prompt === null)
+                    console.log('prompt 是否为 undefined:', selectedTemplate.prompt === undefined)
+                    console.log('prompt 是否为真值:', !!selectedTemplate.prompt)
+                    
+                    // 检查 prompt 是否存在且不为空
+                    const hasPrompt = selectedTemplate.prompt && 
+                                     selectedTemplate.prompt !== null && 
+                                     selectedTemplate.prompt !== undefined && 
+                                     String(selectedTemplate.prompt).trim() !== ''
+                    
                     return (
                       <Box mt={2} p={3} bg="gray.50" borderRadius="md" fontSize="sm">
                         {selectedTemplate.description && (
@@ -362,8 +378,13 @@ const RecognitionParamsModal = ({
                           <Text mb={1}><strong>准确率：</strong>{(selectedTemplate.accuracy * 100).toFixed(1)}%</Text>
                         )}
                         {selectedTemplate.default_schema_id && (
-                          <Text color="green.600" fontWeight="medium">
+                          <Text color="green.600" fontWeight="medium" mb={1}>
                             ✓ 已自动关联输出字段标准
+                          </Text>
+                        )}
+                        {hasPrompt && (
+                          <Text color="blue.600" fontWeight="medium">
+                            ✓ 已填充提示词
                           </Text>
                         )}
                       </Box>

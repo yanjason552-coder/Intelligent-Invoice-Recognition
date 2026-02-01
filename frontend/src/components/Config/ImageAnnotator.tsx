@@ -19,6 +19,9 @@ interface ImageAnnotatorProps {
   onAnnotationAdd?: (annotation: Annotation) => void
   onAnnotationDelete?: (id: string) => void
   editable?: boolean
+  selectedAnnotationId?: string | null
+  onAnnotationSelect?: (id: string | null) => void
+  scale?: number
 }
 
 const ImageAnnotator = ({
@@ -27,7 +30,10 @@ const ImageAnnotator = ({
   onAnnotationChange,
   onAnnotationAdd,
   onAnnotationDelete,
-  editable = true
+  editable = true,
+  selectedAnnotationId: externalSelectedId,
+  onAnnotationSelect,
+  scale: externalScale = 1
 }: ImageAnnotatorProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const imageRef = useRef<HTMLImageElement>(null)
@@ -35,8 +41,20 @@ const ImageAnnotator = ({
   const [isDrawing, setIsDrawing] = useState(false)
   const [startPos, setStartPos] = useState<{ x: number, y: number } | null>(null)
   const [currentAnnotation, setCurrentAnnotation] = useState<Annotation | null>(null)
-  const [scale, setScale] = useState(1)
-  const [selectedAnnotation, setSelectedAnnotation] = useState<string | null>(null)
+  const [internalScale, setInternalScale] = useState(1)
+  const [internalSelectedAnnotation, setInternalSelectedAnnotation] = useState<string | null>(null)
+  
+  // 使用外部传入的scale和selectedAnnotationId，如果没有则使用内部状态
+  const scale = externalScale !== 1 ? externalScale : internalScale
+  const selectedAnnotation = externalSelectedId !== undefined ? externalSelectedId : internalSelectedAnnotation
+  
+  const setSelectedAnnotation = (id: string | null) => {
+    if (onAnnotationSelect) {
+      onAnnotationSelect(id)
+    } else {
+      setInternalSelectedAnnotation(id)
+    }
+  }
 
   // 加载图片
   useEffect(() => {
@@ -44,24 +62,69 @@ const ImageAnnotator = ({
 
     const img = new Image()
     img.crossOrigin = 'anonymous'
+    
     img.onload = () => {
+      console.log('ImageAnnotator: 图片加载成功', imageUrl)
       imageRef.current = img
       const canvas = canvasRef.current!
       const container = containerRef.current!
       
-      // 计算缩放比例以适应容器
-      const maxWidth = container.clientWidth - 40
-      const maxHeight = 600
-      const scaleX = maxWidth / img.width
-      const scaleY = maxHeight / img.height
-      const newScale = Math.min(scaleX, scaleY, 1)
-      setScale(newScale)
-
-      canvas.width = img.width * newScale
-      canvas.height = img.height * newScale
+      if (!container) {
+        console.warn('ImageAnnotator: 容器未找到')
+        return
+      }
+      
+      // 计算缩放比例以适应容器（仅在未传入外部scale时）
+      if (externalScale === 1) {
+        const maxWidth = container.clientWidth - 40 || 800
+        const maxHeight = 600
+        const scaleX = maxWidth / img.width
+        const scaleY = maxHeight / img.height
+        const newScale = Math.min(scaleX, scaleY, 1)
+        setInternalScale(newScale)
+        
+        canvas.width = img.width * newScale
+        canvas.height = img.height * newScale
+      } else {
+        // 使用外部传入的scale
+        canvas.width = img.width * externalScale
+        canvas.height = img.height * externalScale
+      }
       drawImage()
     }
-    img.src = imageUrl
+    
+    img.onerror = (error) => {
+      console.error('ImageAnnotator: 图片加载失败', imageUrl, error)
+    }
+    
+    // 处理不同类型的图片URL
+    let finalUrl = imageUrl
+    
+    // data URL 和 blob URL 直接使用
+    if (imageUrl.startsWith('data:') || imageUrl.startsWith('blob:')) {
+      finalUrl = imageUrl
+    } 
+    // HTTP/HTTPS URL 直接使用
+    else if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      finalUrl = imageUrl
+    }
+    // 相对路径需要转换为绝对路径
+    else {
+      if (imageUrl.startsWith('/')) {
+        finalUrl = `${window.location.origin}${imageUrl}`
+      } else {
+        finalUrl = `${window.location.origin}/api/v1${imageUrl}`
+      }
+    }
+    
+    console.log('ImageAnnotator: 开始加载图片', finalUrl)
+    
+    // 对于 blob URL，移除 crossOrigin 属性（可能导致 CORS 错误）
+    if (imageUrl.startsWith('blob:') || imageUrl.startsWith('data:')) {
+      img.crossOrigin = null
+    }
+    
+    img.src = finalUrl
   }, [imageUrl])
 
   // 绘制图片和标注
@@ -212,14 +275,24 @@ const ImageAnnotator = ({
       const width = Math.abs(pos.x - startPos.x)
       const height = Math.abs(pos.y - startPos.y)
 
+      // 根据标注类型设置颜色
+      const getColorByType = (type: Annotation['type']) => {
+        switch (type) {
+          case 'logo': return '#10B981'
+          case 'field': return '#3B82F6'
+          case 'regex': return '#F59E0B'
+          default: return '#3B82F6'
+        }
+      }
+      
       const newAnnotation: Annotation = {
         id: `annotation-${Date.now()}`,
-        type: 'field',
+        type: 'field', // 默认类型，可以在创建后通过对话框修改
         x,
         y,
         width,
         height,
-        color: '#3B82F6'
+        color: getColorByType('field')
       }
       setCurrentAnnotation(newAnnotation)
       drawImage()
@@ -243,7 +316,17 @@ const ImageAnnotator = ({
   // 重新绘制
   useEffect(() => {
     drawImage()
-  }, [annotations, selectedAnnotation, currentAnnotation])
+  }, [annotations, selectedAnnotation, currentAnnotation, scale])
+  
+  // 监听外部scale变化
+  useEffect(() => {
+    if (externalScale !== 1 && imageRef.current && canvasRef.current) {
+      const img = imageRef.current
+      canvasRef.current.width = img.width * externalScale
+      canvasRef.current.height = img.height * externalScale
+      drawImage()
+    }
+  }, [externalScale])
 
   return (
     <Box ref={containerRef} position="relative" w="100%">
@@ -252,11 +335,22 @@ const ImageAnnotator = ({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onDoubleClick={(e) => {
+          if (!editable) return
+          const pos = getCanvasCoordinates(e)
+          if (!pos) return
+          const clickedAnnotation = getAnnotationAtPoint(pos.x, pos.y)
+          if (clickedAnnotation && onAnnotationSelect) {
+            // 双击标注时，由父组件处理（打开编辑对话框）
+            onAnnotationSelect(clickedAnnotation.id)
+          }
+        }}
         style={{
-          cursor: editable ? 'crosshair' : 'default',
+          cursor: editable ? (isDrawing ? 'crosshair' : 'default') : 'default',
           border: '1px solid #e2e8f0',
           borderRadius: '4px',
-          maxWidth: '100%'
+          maxWidth: '100%',
+          display: 'block'
         }}
       />
       {editable && (
