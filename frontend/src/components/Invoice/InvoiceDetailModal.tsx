@@ -1,4 +1,4 @@
-import { Box, Text, Flex, VStack, Badge, Grid, GridItem, HStack } from "@chakra-ui/react"
+import { Box, Text, Flex, VStack, Badge, Grid, GridItem, Table } from "@chakra-ui/react"
 import { FiX, FiSave } from "react-icons/fi"
 import { useState, useEffect, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
@@ -37,6 +37,12 @@ interface InvoiceDetail {
   create_time: string
   error_code?: string | null
   error_message?: string | null
+  template_version_id?: string | null
+  field_defs_snapshot?: Record<string, any> | null
+  template_version?: string | null
+  template_name?: string | null
+  model_name?: string | null
+  normalized_fields?: Record<string, any> | null
 }
 
 interface SchemaValidationStatus {
@@ -80,6 +86,7 @@ interface InvoiceItem {
   tax_amount: number | null
 }
 
+
 const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalProps) => {
   const [invoiceDetail, setInvoiceDetail] = useState<InvoiceDetail | null>(null)
   const [invoiceItems, setInvoiceItems] = useState<InvoiceItem[]>([])
@@ -118,8 +125,10 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
-      
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
+      console.log('🔍 DEBUG: 前端发送请求，invoiceId:', invoiceId, '类型:', typeof invoiceId)
+
       const response = await axios.get(
         `${apiBaseUrl}/api/v1/invoices/${invoiceId}`,
         {
@@ -130,7 +139,25 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
       )
 
       if (response.data) {
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/afa6fab0-66d4-4499-8b93-5ccac21fa749',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InvoiceDetailModal.tsx:140',message:'API响应接收',data:{invoiceId,status:response.status,hasNormalizedFields:!!response.data.normalized_fields,normalizedFieldsType:typeof response.data.normalized_fields,normalizedFieldsIsNull:response.data.normalized_fields === null,normalizedFieldsIsUndefined:response.data.normalized_fields === undefined,normalizedFieldsKeys:response.data.normalized_fields ? Object.keys(response.data.normalized_fields) : null,normalizedFieldsItemsLength:response.data.normalized_fields?.items?.length || 0},timestamp:Date.now(),runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
+        console.log('=== 发票详情 API 响应 ===')
+        console.log('响应状态:', response.status)
+        console.log('响应头:', response.headers)
+        console.log('响应数据:', response.data)
+        console.log('模型名称:', response.data.model_name)
+        console.log('normalized_fields:', response.data.normalized_fields)
+        console.log('normalized_fields 类型:', typeof response.data.normalized_fields)
+        console.log('normalized_fields 是否为 null:', response.data.normalized_fields === null)
+        console.log('normalized_fields 是否为 undefined:', response.data.normalized_fields === undefined)
+        console.log('normalized_fields.items:', response.data.normalized_fields?.items)
+        console.log('完整响应 JSON 字符串:', JSON.stringify(response.data, null, 2))
+        console.log('=== 响应结束 ===')
         setInvoiceDetail(response.data)
+        // #region agent log
+        fetch('http://127.0.0.1:7244/ingest/afa6fab0-66d4-4499-8b93-5ccac21fa749',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InvoiceDetailModal.tsx:153',message:'设置invoiceDetail状态',data:{hasNormalizedFields:!!response.data.normalized_fields,normalizedFieldsType:typeof response.data.normalized_fields},timestamp:Date.now(),runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+        // #endregion
       }
     } catch (error: any) {
       console.error('获取发票详情失败:', error)
@@ -148,7 +175,8 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
       
       const response = await axios.get(
         `${apiBaseUrl}/api/v1/invoices/${invoiceId}/items`,
@@ -177,7 +205,8 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
       
       const response = await axios.get(
         `${apiBaseUrl}/api/v1/invoices/${invoiceId}/file`,
@@ -209,7 +238,8 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
 
       const response = await axios.get(
         `${apiBaseUrl}/api/v1/invoices/${invoiceId}/schema-validation-status`,
@@ -237,7 +267,8 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
       
       // 使用fetch获取文件，可以设置Authorization header
       const response = await fetch(
@@ -265,7 +296,8 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
       return pdfBlobUrl
     }
     if (!invoiceFile) return null
-    const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+    // 使用相对路径，让Vite proxy处理，避免跨域问题
+    const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
     return `${apiBaseUrl}/api/v1/invoices/${invoiceId}/file/download`
   }
 
@@ -324,7 +356,8 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
       
       // 获取所有行数据
       const allRowData: InvoiceItem[] = []
@@ -374,6 +407,163 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
       setIsSaving(false)
     }
   }
+
+  // 判断是否是尺寸/孔位类检验记录大模型
+  const isDimensionInspectionModel = useMemo(() => {
+    const modelName = invoiceDetail?.model_name
+    const isMatch = modelName === '尺寸/孔位类检验记录大模型'
+    console.log('模型名称检查:', { modelName, isMatch, invoiceDetail })
+    return isMatch
+  }, [invoiceDetail?.model_name, invoiceDetail])
+  
+  // 判断是否是检验记录表（根据模型名称或数据字段）
+  const isInspectionRecord = useMemo(() => {
+    // 如果模型名称是"尺寸/孔位类检验记录大模型"，直接返回 true
+    if (isDimensionInspectionModel) {
+      console.log('isInspectionRecord: 通过模型名称判断为 true')
+      return true
+    }
+    // 否则根据数据字段判断
+    if (!invoiceDetail?.normalized_fields) {
+      console.log('isInspectionRecord: normalized_fields 不存在，返回 false')
+      return false
+    }
+    const fields = invoiceDetail.normalized_fields
+    // 检查是否是检验记录表的关键字段
+    const hasInspectionFields = (
+      (fields.doc_type && (
+        fields.doc_type === '检验记录表' ||
+        fields.doc_type === '零件检验记录表' ||
+        fields.doc_type === 'dimension_inspection' ||
+        (typeof fields.doc_type === 'string' && (
+          fields.doc_type.includes('检验记录表') ||
+          fields.doc_type.includes('inspection') ||
+          fields.doc_type.includes('检验')
+        ))
+      )) ||
+      fields.drawing_no !== undefined ||
+      fields.part_name !== undefined ||
+      fields.part_no !== undefined ||
+      fields.form_title !== undefined ||
+      fields.inspector_name !== undefined
+    )
+    // 检查 items 数组中的第一个元素是否包含检验记录表的字段
+    const hasInspectionItems = (
+      Array.isArray(fields.items) && 
+      fields.items.length > 0 && 
+      fields.items[0] && 
+      typeof fields.items[0] === 'object' &&
+      ('inspection_item' in fields.items[0] || 'spec_requirement' in fields.items[0] || 'judgement' in fields.items[0])
+    )
+    const result = hasInspectionFields || hasInspectionItems
+    console.log('isInspectionRecord: 通过数据字段判断为', result, { 
+      hasInspectionFields, 
+      hasInspectionItems, 
+      fields,
+      items: fields.items,
+      firstItem: fields.items?.[0]
+    })
+    return result
+  }, [invoiceDetail?.normalized_fields, isDimensionInspectionModel])
+
+  // 检验记录表的列定义（根据模型类型动态调整）
+  const inspectionItemColumnDefs: ColDef[] = useMemo(() => {
+    // 如果是尺寸/孔位类检验记录大模型，使用特定的列定义
+    if (isDimensionInspectionModel) {
+      return [
+        { 
+          headerName: '检验项', 
+          field: 'inspection_item', 
+          width: 200,
+          editable: false
+        },
+        { 
+          headerName: '要求', 
+          field: 'spec_requirement', 
+          width: 200,
+          editable: false
+        },
+        { 
+          headerName: '实际值', 
+          field: 'actual_value', 
+          width: 150,
+          editable: false
+        },
+        { 
+          headerName: '值范围', 
+          field: 'range_value', 
+          width: 150,
+          editable: false
+        },
+        { 
+          headerName: '检验结果', 
+          field: 'judgement', 
+          width: 120,
+          editable: false,
+          cellRenderer: (params: any) => {
+            const value = params.value
+            if (value === 'pass') {
+              return '<span style="color: green; font-weight: bold;">合格</span>'
+            } else if (value === 'fail') {
+              return '<span style="color: red; font-weight: bold;">不合格</span>'
+            } else if (value === 'unknown') {
+              return '<span style="color: gray;">未知</span>'
+            }
+            return value || '-'
+          }
+        },
+        { 
+          headerName: '备注', 
+          field: 'notes', 
+          width: 200,
+          editable: false
+        }
+      ]
+    }
+    // 其他检验记录表使用默认列定义
+    return [
+      { headerName: '序号', field: 'item_no', width: 80, editable: false },
+      { 
+        headerName: '检验项目', 
+        field: 'inspection_item', 
+        width: 200,
+        editable: false
+      },
+      { 
+        headerName: '规格要求', 
+        field: 'spec_requirement', 
+        width: 200,
+        editable: false
+      },
+      { 
+        headerName: '实测值', 
+        field: 'actual_value', 
+        width: 150,
+        editable: false
+      },
+      { 
+        headerName: '判定', 
+        field: 'judgement', 
+        width: 100,
+        editable: false,
+        cellRenderer: (params: any) => {
+          const value = params.value
+          if (value === 'pass') {
+            return '<span style="color: green; font-weight: bold;">合格</span>'
+          } else if (value === 'fail') {
+            return '<span style="color: red; font-weight: bold;">不合格</span>'
+          }
+          return value || '-'
+        }
+      },
+      { 
+        headerName: '备注', 
+        field: 'notes', 
+        width: 200,
+        editable: false
+      }
+    ]
+  }, [isDimensionInspectionModel])
 
   const itemColumnDefs: ColDef[] = useMemo(() => {
     const currencySymbol = getCurrencySymbol(invoiceDetail?.currency)
@@ -504,7 +694,7 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
         {/* 标题栏 */}
         <Flex justify="space-between" align="center" mb={4}>
           <Text fontSize="xl" fontWeight="bold">
-            发票详情
+            {isDimensionInspectionModel ? '详情' : '发票详情'}
           </Text>
           <Button
             size="sm"
@@ -561,18 +751,22 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
                   </Box>
                 ) : invoiceFile ? (
                   <Box display="flex" alignItems="center" justifyContent="center" h="100%" p={4}>
-                    <Text color="gray.500" textAlign="center">
-                      不支持预览此文件类型: {invoiceFile.mime_type}
-                      <br />
-                      <a 
-                        href={getFileUrl() || ''} 
-                        target="_blank" 
-                        rel="noopener noreferrer" 
-                        style={{ color: 'blue', textDecoration: 'underline', marginTop: '8px', display: 'inline-block' }}
+                    <VStack gap={4}>
+                      <Text color="gray.500" textAlign="center">
+                        不支持预览此文件类型: {invoiceFile.mime_type}
+                      </Text>
+                      <Button
+                        onClick={() => {
+                          const url = getFileUrl()
+                          if (url) {
+                            window.open(url, '_blank', 'noopener,noreferrer')
+                          }
+                        }}
+                        colorScheme="blue"
                       >
-                        点击下载
-                      </a>
-                    </Text>
+                        下载文件
+                      </Button>
+                    </VStack>
                   </Box>
                 ) : (
                   <Box display="flex" alignItems="center" justifyContent="center" h="100%">
@@ -585,87 +779,236 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
             {/* 右侧：发票详情 */}
             <Box flex="1" minW="0" overflow="auto">
               <VStack align="stretch" gap={6}>
-                {/* 发票抬头信息 */}
+                {/* 发票抬头信息 / 检验记录表头信息 */}
                 <Box>
               <Text fontSize="lg" fontWeight="bold" mb={4} pb={2} borderBottom="2px solid" borderColor="gray.200">
-                发票抬头信息
+                {isInspectionRecord ? '检验记录表信息' : '发票抬头信息'}
               </Text>
+              {(() => {
+                // #region agent log
+                fetch('http://127.0.0.1:7244/ingest/afa6fab0-66d4-4499-8b93-5ccac21fa749',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InvoiceDetailModal.tsx:776',message:'渲染头信息检查',data:{isInspectionRecord,isDimensionInspectionModel,hasNormalizedFields:!!invoiceDetail.normalized_fields,normalizedFieldsType:typeof invoiceDetail.normalized_fields,normalizedFieldsIsNull:invoiceDetail.normalized_fields === null,normalizedFieldsKeys:invoiceDetail.normalized_fields ? Object.keys(invoiceDetail.normalized_fields) : null,normalizedFieldsItemsLength:invoiceDetail.normalized_fields?.items?.length || 0},timestamp:Date.now(),runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+                // #endregion
+                console.log('渲染头信息检查:', {
+                  isInspectionRecord,
+                  isDimensionInspectionModel,
+                  hasNormalizedFields: !!invoiceDetail.normalized_fields,
+                  normalizedFields: invoiceDetail.normalized_fields
+                })
+                return null
+              })()}
               <Grid templateColumns="repeat(2, 1fr)" gap={4}>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">票据编号</Text>
-                  <Text fontWeight="medium">{invoiceDetail.invoice_no || '-'}</Text>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">票据类型</Text>
-                  <Text fontWeight="medium">{invoiceDetail.invoice_type || '-'}</Text>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">开票日期</Text>
-                  <Text fontWeight="medium">
-                    {invoiceDetail.invoice_date ? new Date(invoiceDetail.invoice_date).toLocaleDateString('zh-CN') : '-'}
-                  </Text>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">识别状态</Text>
-                  <Flex direction="column" gap={2}>
-                    {getStatusBadge(invoiceDetail.recognition_status)}
-                    {invoiceDetail.recognition_status === 'failed' && (invoiceDetail.error_code || invoiceDetail.error_message) && (
-                      <Box bg="red.50" p={2} borderRadius="sm" border="1px" borderColor="red.200">
-                        <Text fontSize="xs" fontWeight="medium" color="red.700" mb={1}>
-                          失败原因:
-                        </Text>
-                        {invoiceDetail.error_code && (
-                          <Text fontSize="xs" color="red.600" mb={0.5}>
-                            错误代码: {invoiceDetail.error_code}
+                {isInspectionRecord ? (
+                  <>
+                    {/* 如果是尺寸/孔位类检验记录大模型，显示特定字段 */}
+                    {isDimensionInspectionModel ? (
+                      <>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">票据编号</Text>
+                          <Text fontWeight="medium">{invoiceDetail.invoice_no || '-'}</Text>
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">日期</Text>
+                          <Text fontWeight="medium">
+                            {invoiceDetail.normalized_fields?.date 
+                              ? (typeof invoiceDetail.normalized_fields.date === 'string' 
+                                  ? invoiceDetail.normalized_fields.date 
+                                  : new Date(invoiceDetail.normalized_fields.date).toLocaleDateString('zh-CN'))
+                              : '-'}
                           </Text>
-                        )}
-                        {invoiceDetail.error_message && (
-                          <Text fontSize="xs" color="red.600">
-                            {invoiceDetail.error_message}
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">识别状态</Text>
+                          <Flex direction="column" gap={2}>
+                            {getStatusBadge(invoiceDetail.recognition_status)}
+                            {invoiceDetail.recognition_status === 'failed' && (invoiceDetail.error_code || invoiceDetail.error_message) && (
+                              <Box bg="red.50" p={2} borderRadius="sm" border="1px" borderColor="red.200">
+                                <Text fontSize="xs" fontWeight="medium" color="red.700" mb={1}>
+                                  失败原因:
+                                </Text>
+                                {invoiceDetail.error_code && (
+                                  <Text fontSize="xs" color="red.600" mb={0.5}>
+                                    错误代码: {invoiceDetail.error_code}
+                                  </Text>
+                                )}
+                                {invoiceDetail.error_message && (
+                                  <Text fontSize="xs" color="red.600">
+                                    {invoiceDetail.error_message}
+                                  </Text>
+                                )}
+                              </Box>
+                            )}
+                          </Flex>
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">审核状态</Text>
+                          <Badge colorScheme={invoiceDetail.review_status === 'approved' ? 'green' : invoiceDetail.review_status === 'rejected' ? 'red' : 'gray'}>
+                            {invoiceDetail.review_status === 'approved' ? '成功' : invoiceDetail.review_status === 'rejected' ? '失败' : '待审核'}
+                          </Badge>
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">审核员</Text>
+                          <Text fontWeight="medium">{invoiceDetail.normalized_fields?.inspector_name || '-'}</Text>
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">文档类型</Text>
+                          <Text fontWeight="medium">{invoiceDetail.normalized_fields?.doc_type || '-'}</Text>
+                        </GridItem>
+                      </>
+                    ) : (
+                      <>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">日期</Text>
+                          <Text fontWeight="medium">
+                            {invoiceDetail.normalized_fields?.date 
+                              ? new Date(invoiceDetail.normalized_fields.date).toLocaleDateString('zh-CN') 
+                              : '-'}
                           </Text>
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">文档类型</Text>
+                          <Text fontWeight="medium">{invoiceDetail.normalized_fields?.doc_type || '-'}</Text>
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">图号</Text>
+                          <Text fontWeight="medium">{invoiceDetail.normalized_fields?.drawing_no || '-'}</Text>
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">表单标题</Text>
+                          <Text fontWeight="medium">{invoiceDetail.normalized_fields?.form_title || '-'}</Text>
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">检验员</Text>
+                          <Text fontWeight="medium">{invoiceDetail.normalized_fields?.inspector_name || '-'}</Text>
+                        </GridItem>
+                        {invoiceDetail.normalized_fields?.part_name && (
+                          <GridItem>
+                            <Text fontSize="sm" color="gray.600">零件名称</Text>
+                            <Text fontWeight="medium">{invoiceDetail.normalized_fields.part_name}</Text>
+                          </GridItem>
                         )}
-                      </Box>
+                        {invoiceDetail.normalized_fields?.part_no && (
+                          <GridItem>
+                            <Text fontSize="sm" color="gray.600">零件号</Text>
+                            <Text fontWeight="medium">{invoiceDetail.normalized_fields.part_no}</Text>
+                          </GridItem>
+                        )}
+                        {invoiceDetail.normalized_fields?.overall_result && (
+                          <GridItem>
+                            <Text fontSize="sm" color="gray.600">总体结果</Text>
+                            <Badge colorScheme={invoiceDetail.normalized_fields.overall_result === 'pass' ? 'green' : 'red'}>
+                              {invoiceDetail.normalized_fields.overall_result === 'pass' ? '合格' : '不合格'}
+                            </Badge>
+                          </GridItem>
+                        )}
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">识别状态</Text>
+                          <Flex direction="column" gap={2}>
+                            {getStatusBadge(invoiceDetail.recognition_status)}
+                            {invoiceDetail.recognition_status === 'failed' && (invoiceDetail.error_code || invoiceDetail.error_message) && (
+                              <Box bg="red.50" p={2} borderRadius="sm" border="1px" borderColor="red.200">
+                                <Text fontSize="xs" fontWeight="medium" color="red.700" mb={1}>
+                                  失败原因:
+                                </Text>
+                                {invoiceDetail.error_code && (
+                                  <Text fontSize="xs" color="red.600" mb={0.5}>
+                                    错误代码: {invoiceDetail.error_code}
+                                  </Text>
+                                )}
+                                {invoiceDetail.error_message && (
+                                  <Text fontSize="xs" color="red.600">
+                                    {invoiceDetail.error_message}
+                                  </Text>
+                                )}
+                              </Box>
+                            )}
+                          </Flex>
+                        </GridItem>
+                        <GridItem>
+                          <Text fontSize="sm" color="gray.600">审核状态</Text>
+                          {getStatusBadge(invoiceDetail.review_status)}
+                        </GridItem>
+                      </>
                     )}
-                  </Flex>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">审核状态</Text>
-                  {getStatusBadge(invoiceDetail.review_status)}
-                </GridItem>
-                <GridItem colSpan={2}>
-                  <Text fontSize="sm" color="gray.600">供应商名称</Text>
-                  <Text fontWeight="medium">{invoiceDetail.supplier_name || '-'}</Text>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">供应商税号</Text>
-                  <Text fontWeight="medium">{invoiceDetail.supplier_tax_no || '-'}</Text>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">采购方名称</Text>
-                  <Text fontWeight="medium">{invoiceDetail.buyer_name || '-'}</Text>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">采购方税号</Text>
-                  <Text fontWeight="medium">{invoiceDetail.buyer_tax_no || '-'}</Text>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">金额（不含税）</Text>
-                  <Text fontWeight="medium" color="blue.600">
-                    {formatAmount(invoiceDetail.amount)}
-                  </Text>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">税额</Text>
-                  <Text fontWeight="medium" color="blue.600">
-                    {formatAmount(invoiceDetail.tax_amount)}
-                  </Text>
-                </GridItem>
-                <GridItem>
-                  <Text fontSize="sm" color="gray.600">合计金额</Text>
-                  <Text fontWeight="bold" fontSize="md" color="red.600">
-                    {formatAmount(invoiceDetail.total_amount)}
-                  </Text>
-                </GridItem>
+                  </>
+                ) : (
+                  <>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">票据编号</Text>
+                      <Text fontWeight="medium">{invoiceDetail.invoice_no || '-'}</Text>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">票据类型</Text>
+                      <Text fontWeight="medium">{invoiceDetail.invoice_type || '-'}</Text>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">开票日期</Text>
+                      <Text fontWeight="medium">
+                        {invoiceDetail.invoice_date ? new Date(invoiceDetail.invoice_date).toLocaleDateString('zh-CN') : '-'}
+                      </Text>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">识别状态</Text>
+                      <Flex direction="column" gap={2}>
+                        {getStatusBadge(invoiceDetail.recognition_status)}
+                        {invoiceDetail.recognition_status === 'failed' && (invoiceDetail.error_code || invoiceDetail.error_message) && (
+                          <Box bg="red.50" p={2} borderRadius="sm" border="1px" borderColor="red.200">
+                            <Text fontSize="xs" fontWeight="medium" color="red.700" mb={1}>
+                              失败原因:
+                            </Text>
+                            {invoiceDetail.error_code && (
+                              <Text fontSize="xs" color="red.600" mb={0.5}>
+                                错误代码: {invoiceDetail.error_code}
+                              </Text>
+                            )}
+                            {invoiceDetail.error_message && (
+                              <Text fontSize="xs" color="red.600">
+                                {invoiceDetail.error_message}
+                              </Text>
+                            )}
+                          </Box>
+                        )}
+                      </Flex>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">审核状态</Text>
+                      {getStatusBadge(invoiceDetail.review_status)}
+                    </GridItem>
+                    <GridItem colSpan={2}>
+                      <Text fontSize="sm" color="gray.600">供应商名称</Text>
+                      <Text fontWeight="medium">{invoiceDetail.supplier_name || '-'}</Text>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">供应商税号</Text>
+                      <Text fontWeight="medium">{invoiceDetail.supplier_tax_no || '-'}</Text>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">采购方名称</Text>
+                      <Text fontWeight="medium">{invoiceDetail.buyer_name || '-'}</Text>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">采购方税号</Text>
+                      <Text fontWeight="medium">{invoiceDetail.buyer_tax_no || '-'}</Text>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">金额（不含税）</Text>
+                      <Text fontWeight="medium" color="blue.600">
+                        {formatAmount(invoiceDetail.amount)}
+                      </Text>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">税额</Text>
+                      <Text fontWeight="medium" color="blue.600">
+                        {formatAmount(invoiceDetail.tax_amount)}
+                      </Text>
+                    </GridItem>
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">合计金额</Text>
+                      <Text fontWeight="bold" fontSize="md" color="red.600">
+                        {formatAmount(invoiceDetail.total_amount)}
+                      </Text>
+                    </GridItem>
+                  </>
+                )}
                 <GridItem>
                   <Text fontSize="sm" color="gray.600">创建时间</Text>
                   <Text fontWeight="medium">
@@ -675,8 +1018,192 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
               </Grid>
             </Box>
 
+            {/* 模板信息 */}
+            {invoiceDetail.template_name && (
+              <Box>
+                <Text fontSize="lg" fontWeight="bold" mb={4} pb={2} borderBottom="2px solid" borderColor="gray.200">
+                  识别模板信息
+                </Text>
+                <Grid templateColumns="repeat(2, 1fr)" gap={4}>
+                  <GridItem>
+                    <Text fontSize="sm" color="gray.600">模板名称</Text>
+                    <Text fontWeight="medium">{invoiceDetail.template_name}</Text>
+                  </GridItem>
+                  {invoiceDetail.template_version && (
+                    <GridItem>
+                      <Text fontSize="sm" color="gray.600">模板版本</Text>
+                      <Text fontWeight="medium">{invoiceDetail.template_version}</Text>
+                    </GridItem>
+                  )}
+                </Grid>
+              </Box>
+            )}
+
+            {/* 动态字段渲染 - 兼容发票和检验记录表两种类型 */}
+            {false && invoiceDetail.normalized_fields && (() => {
+              // 字段名称映射（用于显示友好的中文名称）
+              const fieldNameMap: Record<string, string> = {
+                // 发票字段
+                invoice_no: '发票号码',
+                invoice_type: '发票类型',
+                invoice_date: '开票日期',
+                amount: '金额（不含税）',
+                tax_amount: '税额',
+                total_amount: '合计金额',
+                currency: '币种',
+                supplier_name: '供应商名称',
+                supplier_tax_no: '供应商税号',
+                buyer_name: '采购方名称',
+                buyer_tax_no: '采购方税号',
+                remark: '备注',
+                // 检验记录表字段
+                doc_type: '文档类型',
+                form_title: '表单标题',
+                drawing_no: '图号',
+                part_name: '零件名称',
+                part_no: '零件号',
+                date: '日期',
+                inspector_name: '检验员',
+                overall_result: '总体结果',
+                remarks: '备注',
+                // 不显示 items，因为它在行项目部分单独显示
+              }
+              
+              let fields: any[] = []
+              
+              // 如果有 field_defs_snapshot，优先使用它（发票类型通常有这个）
+              if (invoiceDetail.field_defs_snapshot) {
+                let fieldsArray: any[] = []
+                
+                if (Array.isArray(invoiceDetail.field_defs_snapshot)) {
+                  fieldsArray = invoiceDetail.field_defs_snapshot
+                } else if (typeof invoiceDetail.field_defs_snapshot === 'object') {
+                  fieldsArray = Object.entries(invoiceDetail.field_defs_snapshot)
+                    .map(([fieldKey, fieldDef]: [string, any]) => ({
+                      field_key: fieldKey,
+                      field_name: fieldDef.field_name || fieldKey,
+                      data_type: fieldDef.data_type || 'string',
+                      is_required: fieldDef.is_required || false,
+                      description: fieldDef.description || '',
+                      sort_order: fieldDef.sort_order || 0
+                    }))
+                }
+                
+                fields = fieldsArray
+                  .map((fieldDef: any) => ({
+                    field_key: fieldDef.field_key || '',
+                    field_name: fieldDef.field_name || fieldDef.field_key || '',
+                    data_type: fieldDef.data_type || 'string',
+                    is_required: fieldDef.is_required || false,
+                    description: fieldDef.description || '',
+                    sort_order: fieldDef.sort_order || 0
+                  }))
+                  .sort((a, b) => a.sort_order - b.sort_order)
+              } else {
+                // 如果没有 field_defs_snapshot，直接从 normalized_fields 生成字段列表（检验记录表通常没有 field_defs_snapshot）
+                fields = Object.keys(invoiceDetail.normalized_fields)
+                  .filter(key => {
+                    // 排除 items 数组（它在行项目部分单独显示）
+                    if (key === 'items') return false
+                    // 排除已经是 null 或 undefined 的字段
+                    const value = invoiceDetail.normalized_fields![key]
+                    return value !== null && value !== undefined
+                  })
+                  .map((key, index) => ({
+                    field_key: key,
+                    field_name: fieldNameMap[key] || key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+                    data_type: Array.isArray(invoiceDetail.normalized_fields![key]) ? 'array' : typeof invoiceDetail.normalized_fields![key],
+                    is_required: false,
+                    description: '',
+                    sort_order: index
+                  }))
+              }
+              
+              // 过滤掉 items 字段（它在行项目部分单独显示）
+              fields = fields.filter(field => field.field_key !== 'items')
+
+              if (fields.length === 0) {
+                return null
+              }
+
+              return (
+                <Box>
+                  <Text fontSize="lg" fontWeight="bold" mb={4} pb={2} borderBottom="2px solid" borderColor="gray.200">
+                    {isInspectionRecord ? '检验记录表字段详情' : '识别字段详情'} ({fields.length} 个字段)
+                  </Text>
+                  <Box overflowX="auto" border="1px solid" borderColor="gray.200" borderRadius="md">
+                    <Table.Root size="sm">
+                      <Table.Header bg="gray.50">
+                        <Table.Row>
+                          <Table.ColumnHeader fontSize="sm" fontWeight="600" color="gray.700">字段名称</Table.ColumnHeader>
+                          <Table.ColumnHeader fontSize="sm" fontWeight="600" color="gray.700">字段标识</Table.ColumnHeader>
+                          <Table.ColumnHeader fontSize="sm" fontWeight="600" color="gray.700">字段值</Table.ColumnHeader>
+                          <Table.ColumnHeader fontSize="sm" fontWeight="600" color="gray.700">数据类型</Table.ColumnHeader>
+                          {invoiceDetail.field_defs_snapshot && (
+                            <Table.ColumnHeader fontSize="sm" fontWeight="600" color="gray.700">是否必填</Table.ColumnHeader>
+                          )}
+                        </Table.Row>
+                      </Table.Header>
+                      <Table.Body>
+                        {fields.map((field) => {
+                          const fieldValue = invoiceDetail.normalized_fields?.[field.field_key]
+                          const displayValue = (() => {
+                            if (fieldValue === null || fieldValue === undefined) return null
+                            if (typeof fieldValue === 'object' && !Array.isArray(fieldValue)) {
+                              return JSON.stringify(fieldValue, null, 2)
+                            }
+                            if (Array.isArray(fieldValue)) {
+                              return `[数组，${fieldValue.length} 项]`
+                            }
+                            return String(fieldValue)
+                          })()
+                          
+                          return (
+                            <Table.Row key={field.field_key} _hover={{ bg: 'gray.50' }}>
+                              <Table.Cell>
+                                <VStack align="start" gap={1}>
+                                  <Text fontWeight="medium" fontSize="sm">{field.field_name}</Text>
+                                  {field.description && (
+                                    <Text fontSize="xs" color="gray.500">{field.description}</Text>
+                                  )}
+                                </VStack>
+                              </Table.Cell>
+                              <Table.Cell>
+                                <Text fontFamily="mono" fontSize="xs" color="gray.600">{field.field_key}</Text>
+                              </Table.Cell>
+                              <Table.Cell>
+                                {displayValue !== null ? (
+                                  <Text fontSize="sm" whiteSpace="pre-wrap" wordBreak="break-word">
+                                    {displayValue}
+                                  </Text>
+                                ) : (
+                                  <Text color="gray.400" fontStyle="italic" fontSize="sm">-</Text>
+                                )}
+                              </Table.Cell>
+                              <Table.Cell>
+                                <Badge colorScheme="blue" fontSize="xs">{field.data_type}</Badge>
+                              </Table.Cell>
+                              {invoiceDetail.field_defs_snapshot && (
+                                <Table.Cell>
+                                  {field.is_required ? (
+                                    <Badge colorScheme="red" fontSize="xs">必填</Badge>
+                                  ) : (
+                                    <Badge colorScheme="gray" fontSize="xs">可选</Badge>
+                                  )}
+                                </Table.Cell>
+                              )}
+                            </Table.Row>
+                          )
+                        })}
+                      </Table.Body>
+                    </Table.Root>
+                  </Box>
+                </Box>
+              )
+            })()}
+
             {/* Schema验证状态 */}
-            {schemaValidationStatus && (
+            {false && schemaValidationStatus && (
               <Box>
                 <Text fontSize="lg" fontWeight="bold" mb={4} pb={2} borderBottom="2px solid" borderColor="gray.200">
                   Schema验证状态
@@ -755,27 +1282,52 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
 
             <Box borderTop="1px solid" borderColor="gray.200" my={4} />
 
-            {/* 发票行项目信息 */}
+            {/* 发票行项目信息 / 检验记录表项目信息 */}
             <Box>
               <Flex justify="space-between" align="center" mb={4} pb={2} borderBottom="2px solid" borderColor="gray.200">
                 <Text fontSize="lg" fontWeight="bold">
-                  发票行项目信息 {invoiceItems.length > 0 && `(共 ${invoiceItems.length} 项)`}
+                  {isInspectionRecord 
+                    ? `检验项目信息 ${invoiceDetail.normalized_fields?.items?.length ? `(共 ${invoiceDetail.normalized_fields.items.length} 项)` : ''}`
+                    : `发票行项目信息 ${invoiceItems.length > 0 ? `(共 ${invoiceItems.length} 项)` : ''}`}
                 </Text>
-                {invoiceItems.length > 0 && (
+                {!isInspectionRecord && invoiceItems.length > 0 && (
                   <Button
-                    leftIcon={<FiSave />}
                     colorScheme="blue"
                     size="sm"
                     onClick={handleSaveItems}
                     loading={isSaving}
                   >
+                    <FiSave style={{ marginRight: '8px' }} />
                     保存行项目
                   </Button>
                 )}
               </Flex>
-              {editableItems.length > 0 ? (
+              {isInspectionRecord ? (
+                // 显示检验记录表的 items 数组
+                (() => {
+                  // #region agent log
+                  const items = invoiceDetail.normalized_fields?.items || []
+                  fetch('http://127.0.0.1:7244/ingest/afa6fab0-66d4-4499-8b93-5ccac21fa749',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'InvoiceDetailModal.tsx:1290',message:'渲染检验项目表格',data:{isInspectionRecord,hasNormalizedFields:!!invoiceDetail.normalized_fields,itemsLength:items.length,itemsType:typeof items,itemsIsArray:Array.isArray(items),firstItem:items[0] || null},timestamp:Date.now(),runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+                  // #endregion
+                  return (
+                    <Box className="ag-theme-alpine" style={{ height: '400px', width: '100%' }}>
+                      <AgGridReact
+                        theme="legacy"
+                        rowData={items}
+                        columnDefs={inspectionItemColumnDefs}
+                        defaultColDef={{
+                          resizable: true,
+                          sortable: true
+                        }}
+                      />
+                    </Box>
+                  )
+                })()
+              ) : editableItems.length > 0 ? (
+                // 显示发票行项目
                 <Box className="ag-theme-alpine" style={{ height: '400px', width: '100%' }}>
                   <AgGridReact
+                    theme="legacy"
                     ref={gridRef}
                     rowData={editableItems}
                     columnDefs={itemColumnDefs}
