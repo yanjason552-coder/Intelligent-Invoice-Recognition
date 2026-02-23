@@ -19,6 +19,10 @@ interface InvoiceExportData {
   recognition_status: string
   review_status: string
   create_time: string
+  doc_type?: string | null
+  model_name?: string | null
+  normalized_fields?: Record<string, any> | null
+  [key: string]: any
 }
 
 interface InvoiceItemExportData {
@@ -34,6 +38,13 @@ interface InvoiceItemExportData {
   amount: number | null
   tax_rate: string | null
   tax_amount: number | null
+  // 尺寸检验记录相关字段
+  inspection_item?: string | null
+  spec_requirement?: string | null
+  actual_value?: string | null
+  judgement?: string | null
+  notes?: string | null
+  [key: string]: any
 }
 
 /**
@@ -80,6 +91,132 @@ function downloadCSV(csvContent: string, filename: string) {
 }
 
 /**
+ * 判断是否为尺寸检验记录
+ */
+function isDimensionInspectionRecord(invoice: InvoiceExportData): boolean {
+  // 检查主字段
+  if (invoice.doc_type === 'dimension_inspection') {
+    return true
+  }
+
+  // 检查normalized_fields中的doc_type
+  const normalizedFields = (invoice as any).normalized_fields
+  if (normalizedFields?.doc_type === 'dimension_inspection') {
+    return true
+  }
+
+  // 检查模型名称是否为尺寸/孔位类检验记录大模型
+  if ((invoice as any).model_name === '尺寸/孔位类检验记录大模型') {
+    return true
+  }
+
+  return false
+}
+
+/**
+ * 导出尺寸检验记录为CSV
+ */
+function exportDimensionInspectionToCSV(
+  invoices: InvoiceExportData[],
+  invoiceItems: InvoiceItemExportData[],
+  filename?: string
+) {
+  if (invoices.length === 0) {
+    throw new Error('没有数据可导出')
+  }
+
+  const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+  const defaultFilename = `尺寸检验记录_${timestamp}.csv`
+  const finalFilename = filename || defaultFilename
+
+  // 抬头信息
+  const headerHeaders = [
+    '票据编号',
+    '审核员',
+    '日期',
+    '文档类型'
+  ]
+
+  const headerData = invoices.map(inv => {
+    const normalizedFields = inv.normalized_fields
+    const inspectorName = normalizedFields?.inspector_name || ''
+    const invoiceDate = normalizedFields?.date || inv.invoice_date
+    return {
+      '票据编号': inv.invoice_no || '',
+      '审核员': inspectorName,
+      '日期': invoiceDate ? new Date(invoiceDate).toLocaleDateString('zh-CN') : '',
+      '文档类型': 'dimension_inspection'
+    }
+  })
+
+  // 行项目信息
+  const itemHeaders = [
+    '票据编号',
+    '检验项',
+    '要求',
+    '实际值',
+    '值范围',
+    '检验结果',
+    '备注'
+  ]
+
+  const itemData: any[] = []
+
+  invoices.forEach((invoice) => {
+    const normalizedFields = invoice.normalized_fields
+    const items = normalizedFields?.items || []
+
+    // 如果有normalized_fields中的items，使用这些数据
+    if (items && Array.isArray(items) && items.length > 0) {
+      items.forEach((item: any) => {
+        itemData.push({
+          '票据编号': invoice.invoice_no || '',
+          '检验项': item.inspection_item || item.name || '',
+          '要求': item.spec_requirement || item.requirement || '',
+          '实际值': item.actual_value || item.value || '',
+          '值范围': item.range_value || item.range || '',
+          '检验结果': item.judgement === 'pass' ? '合格' : item.judgement === 'fail' ? '不合格' : item.judgement || '',
+          '备注': item.notes || ''
+        })
+      })
+    } else {
+      // 备用：从invoiceItems中获取数据
+      const invoiceItemsData = invoiceItems.filter(
+        (item) => item.invoice_id === invoice.id
+      )
+
+      invoiceItemsData.forEach((item) => {
+        itemData.push({
+          '票据编号': invoice.invoice_no || '',
+          '检验项': item.inspection_item || item.name || '',
+          '要求': item.spec_requirement || '',
+          '实际值': item.actual_value || '',
+          '值范围': '',
+          '检验结果': item.judgement === 'pass' ? '合格' : item.judgement === 'fail' ? '不合格' : item.judgement || '',
+          '备注': item.notes || ''
+        })
+      })
+    }
+  })
+
+  // 生成CSV内容
+  const headerCSV = convertToCSV(headerData, headerHeaders)
+  const itemCSV = convertToCSV(itemData, itemHeaders)
+
+  // 合并两个CSV，用空行和标题分隔
+  const combinedCSV = [
+    '=== 抬头信息 ===',
+    headerCSV,
+    '',
+    '=== 行信息 ===',
+    itemCSV
+  ].join('\n')
+
+  // 下载文件
+  downloadCSV(combinedCSV, finalFilename)
+}
+
+/**
  * 导出发票数据为CSV
  */
 export function exportInvoicesToCSV(
@@ -89,6 +226,15 @@ export function exportInvoicesToCSV(
 ) {
   if (invoices.length === 0) {
     throw new Error('没有数据可导出')
+  }
+
+  // 检查是否所有发票都是尺寸检验记录
+  const allDimensionInspection = invoices.every(invoice => isDimensionInspectionRecord(invoice))
+
+  // 如果是尺寸检验记录，使用专门的导出格式
+  if (allDimensionInspection) {
+    exportDimensionInspectionToCSV(invoices, invoiceItems, filename)
+    return
   }
 
   const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')

@@ -1,6 +1,6 @@
 import { Box, Text, Flex, Grid, Input, HStack } from "@chakra-ui/react"
 import { FiSearch, FiRefreshCw, FiEye, FiCheck, FiX, FiDownload } from "react-icons/fi"
-import { useState, useMemo, useEffect } from "react"
+import { useState, useMemo, useEffect, useRef } from "react"
 import { AgGridReact } from 'ag-grid-react'
 import { ColDef, ModuleRegistry, AllCommunityModule } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-grid.css'
@@ -25,6 +25,9 @@ interface ReviewTask {
   submitter: string
   reviewStatus: 'pending' | 'approved' | 'rejected'
   companyCode: string | null
+  modelName: string | null
+  templateName: string | null
+  templateVersion: string | null
 }
 
 const InvoiceReviewPending = () => {
@@ -34,6 +37,12 @@ const InvoiceReviewPending = () => {
   const [totalCount, setTotalCount] = useState(0)
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false)
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null)
+  const [modelNameFilter, setModelNameFilter] = useState<string>('')
+  const [templateNameFilter, setTemplateNameFilter] = useState<string>('')
+  const [modelOptions, setModelOptions] = useState<string[]>([])
+  const [templateOptions, setTemplateOptions] = useState<string[]>([])
+  const [selectedRows, setSelectedRows] = useState<ReviewTask[]>([]) // 选中的发票列表
+  const gridRef = useRef<AgGridReact>(null) // AG Grid引用
   const { showSuccessToast, showErrorToast } = useCustomToast()
 
   const fetchData = async () => {
@@ -45,7 +54,21 @@ const InvoiceReviewPending = () => {
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
+      
+      const params: any = {
+        skip: 0,
+        limit: 100
+      }
+      
+      // 添加模型和模板筛选参数
+      if (modelNameFilter) {
+        params.model_name = modelNameFilter
+      }
+      if (templateNameFilter) {
+        params.template_name = templateNameFilter
+      }
       
       const response = await axios.get(
         `${apiBaseUrl}/api/v1/invoices/review/pending`,
@@ -53,10 +76,7 @@ const InvoiceReviewPending = () => {
           headers: {
             'Authorization': `Bearer ${token}`
           },
-          params: {
-            skip: 0,
-            limit: 100
-          }
+          params
         }
       )
 
@@ -72,7 +92,10 @@ const InvoiceReviewPending = () => {
           submitTime: item.create_time ? new Date(item.create_time).toLocaleString('zh-CN') : '',
           submitter: '系统', // 后端没有返回提交人信息，使用默认值
           reviewStatus: item.review_status || 'pending',
-          companyCode: item.company_code || null
+          companyCode: item.company_code || null,
+          modelName: item.model_name || null,
+          templateName: item.template_name || null,
+          templateVersion: item.template_version || null
         }))
         
         setTableData(transformedData)
@@ -93,10 +116,50 @@ const InvoiceReviewPending = () => {
     }
   }
 
+  // 加载模型和模板选项
+  const loadFilterOptions = async () => {
+    try {
+      const token = localStorage.getItem('access_token')
+      if (!token) {
+        return
+      }
+
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
+      
+      // 并行加载模型和模板选项
+      const [modelsResponse, templatesResponse] = await Promise.all([
+        axios.get(`${apiBaseUrl}/api/v1/invoices/filter-options/models`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        }),
+        axios.get(`${apiBaseUrl}/api/v1/invoices/filter-options/templates`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        })
+      ])
+
+      if (modelsResponse.data && modelsResponse.data.data) {
+        setModelOptions(modelsResponse.data.data)
+      }
+      if (templatesResponse.data && templatesResponse.data.data) {
+        setTemplateOptions(templatesResponse.data.data)
+      }
+    } catch (error: any) {
+      console.error('加载筛选选项失败:', error)
+      // 不显示错误提示，避免干扰用户体验
+    }
+  }
+
   // 组件加载时自动获取数据
   useEffect(() => {
     fetchData()
+    loadFilterOptions()
   }, [])
+
+  // 当筛选条件改变时，重新获取数据
+  useEffect(() => {
+    if (modelNameFilter || templateNameFilter) {
+      fetchData()
+    }
+  }, [modelNameFilter, templateNameFilter])
 
   const handleApprove = async (id: string) => {
     try {
@@ -106,7 +169,8 @@ const InvoiceReviewPending = () => {
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
       
       const response = await axios.post(
         `${apiBaseUrl}/api/v1/invoices/review/${id}/approve`,
@@ -145,7 +209,8 @@ const InvoiceReviewPending = () => {
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
       
       const response = await axios.post(
         `${apiBaseUrl}/api/v1/invoices/review/${id}/reject`,
@@ -180,7 +245,8 @@ const InvoiceReviewPending = () => {
         return
       }
 
-      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || 'http://localhost:8000'
+      // 使用相对路径，让Vite proxy处理，避免跨域问题
+      const apiBaseUrl = OpenAPI.BASE || import.meta.env.VITE_API_URL || ''
       
       // 确定要导出的发票ID列表
       let idsToExport: string[] = []
@@ -188,8 +254,9 @@ const InvoiceReviewPending = () => {
         // 如果指定了发票ID列表，使用指定的ID
         idsToExport = invoiceIds
       } else {
-        // 否则导出当前表格中的所有数据
-        idsToExport = tableData.map(item => item.id)
+        // 否则导出当前表格中的所有数据（考虑搜索过滤）
+        let dataToExport = filteredData
+        idsToExport = dataToExport.map(item => item.id)
       }
 
       if (idsToExport.length === 0) {
@@ -245,11 +312,25 @@ const InvoiceReviewPending = () => {
 
   const columnDefs: ColDef[] = [
     {
+      headerName: '',
+      field: 'select',
+      width: 50,
+      checkboxSelection: true,
+      headerCheckboxSelection: true,
+      pinned: 'left',
+      lockPosition: true,
+      sortable: false,
+      filter: false
+    },
+    {
       headerName: '票据编号',
       field: 'invoiceNo',
       width: 150
     },
     { headerName: '公司代码', field: 'companyCode', width: 120 },
+    { headerName: '模型名称', field: 'modelName', width: 150 },
+    { headerName: '模板名称', field: 'templateName', width: 150 },
+    { headerName: '模板版本', field: 'templateVersion', width: 120 },
     { headerName: '票据类型', field: 'invoiceType', width: 150 },
     { headerName: '开票日期', field: 'invoiceDate', width: 120 },
     {
@@ -297,14 +378,21 @@ const InvoiceReviewPending = () => {
     }
   ]
 
+
   const filteredData = useMemo(() => {
-    if (!searchKeyword) return tableData
-    const keyword = searchKeyword.toLowerCase()
-    return tableData.filter(item =>
-      item.invoiceNo.toLowerCase().includes(keyword) ||
-      (item.supplier && item.supplier.toLowerCase().includes(keyword)) ||
-      (item.companyCode && item.companyCode.toLowerCase().includes(keyword))
-    )
+    let filtered = tableData
+    
+    // 搜索关键词过滤
+    if (searchKeyword) {
+      const keyword = searchKeyword.toLowerCase()
+      filtered = filtered.filter(item =>
+        item.invoiceNo.toLowerCase().includes(keyword) ||
+        (item.supplier && item.supplier.toLowerCase().includes(keyword)) ||
+        (item.companyCode && item.companyCode.toLowerCase().includes(keyword))
+      )
+    }
+    
+    return filtered
   }, [tableData, searchKeyword])
 
   return (
@@ -314,13 +402,18 @@ const InvoiceReviewPending = () => {
           待审核票据 {totalCount > 0 && `(共 ${totalCount} 条)`}
         </Text>
         <HStack gap={2}>
+          {selectedRows.length > 0 && (
+            <Text fontSize="sm" color="gray.600">
+              已选择 {selectedRows.length} 条
+            </Text>
+          )}
           <Button
-            onClick={() => handleExport()}
+            onClick={() => handleExport(selectedRows.length > 0 ? selectedRows.map(row => row.id) : undefined)}
             loading={isLoading}
             colorPalette="green"
           >
             <FiDownload style={{ marginRight: '8px' }} />
-            导出全部
+            {selectedRows.length > 0 ? `导出选中(${selectedRows.length})` : '导出全部'}
           </Button>
         <Button
           onClick={fetchData}
@@ -332,13 +425,45 @@ const InvoiceReviewPending = () => {
         </HStack>
       </Flex>
 
-      <Grid templateColumns="1fr auto" gap={3} mb={4}>
+      <Grid templateColumns="repeat(4, 1fr)" gap={3} mb={4}>
         <Input
           placeholder="搜索票据编号或供应商..."
           value={searchKeyword}
           onChange={(e) => setSearchKeyword(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && fetchData()}
         />
+        <select
+          value={modelNameFilter}
+          onChange={(e) => setModelNameFilter(e.target.value)}
+          style={{ 
+            width: '100%', 
+            padding: '8px', 
+            border: '1px solid #e2e8f0', 
+            borderRadius: '4px',
+            fontSize: '14px'
+          }}
+        >
+          <option value="">全部模型</option>
+          {modelOptions.map(model => (
+            <option key={model} value={model}>{model}</option>
+          ))}
+        </select>
+        <select
+          value={templateNameFilter}
+          onChange={(e) => setTemplateNameFilter(e.target.value)}
+          style={{ 
+            width: '100%', 
+            padding: '8px', 
+            border: '1px solid #e2e8f0', 
+            borderRadius: '4px',
+            fontSize: '14px'
+          }}
+        >
+          <option value="">全部模板</option>
+          {templateOptions.map(template => (
+            <option key={template} value={template}>{template}</option>
+          ))}
+        </select>
         <Button onClick={fetchData}>
           <FiSearch style={{ marginRight: '8px' }} />
           搜索
@@ -347,15 +472,24 @@ const InvoiceReviewPending = () => {
 
       <Box className="ag-theme-alpine" style={{ height: '600px', width: '100%', overflow: 'hidden' }}>
         <AgGridReact
+          ref={gridRef}
           theme="legacy"
           rowData={filteredData}
           columnDefs={columnDefs}
+          rowSelection="multiple"
+          suppressRowClickSelection={true}
           defaultColDef={{
             resizable: true,
             sortable: true,
             filter: true
           }}
           onGridReady={() => fetchData()}
+          onSelectionChanged={() => {
+            if (gridRef.current?.api) {
+              const selectedRows = gridRef.current.api.getSelectedRows() as ReviewTask[]
+              setSelectedRows(selectedRows || [])
+            }
+          }}
         />
       </Box>
 

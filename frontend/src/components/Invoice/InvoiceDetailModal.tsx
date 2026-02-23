@@ -495,15 +495,15 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
           width: 150,
           editable: false
         },
-        { 
-          headerName: '检验结果', 
-          field: 'judgement', 
+        {
+          headerName: '检验结果',
+          field: 'judgement',
           width: 120,
           editable: false,
           cellRenderer: (params: any) => {
             const value = params.value
             if (value === 'pass') {
-              return '<span style="color: green; font-weight: bold;">合格</span>'
+              return '合格'
             } else if (value === 'fail') {
               return '<span style="color: red; font-weight: bold;">不合格</span>'
             } else if (value === 'unknown') {
