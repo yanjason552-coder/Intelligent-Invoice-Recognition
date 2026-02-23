@@ -466,39 +466,19 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
     return result
   }, [invoiceDetail?.normalized_fields, isDimensionInspectionModel])
 
-  // 检验记录表的列定义（根据模型类型动态调整）
-  const inspectionItemColumnDefs: ColDef[] = useMemo(() => {
-    // 如果是尺寸/孔位类检验记录大模型，使用特定的列定义
-    if (isDimensionInspectionModel) {
+  // 根据JSON Schema动态生成列定义
+  const generateColumnDefsFromSchema = (schema: any, items: any[]): ColDef[] => {
+    if (!schema || !schema.properties) {
+      // 如果没有Schema，使用默认的检验记录列定义
       return [
-        { 
-          headerName: '检验项', 
-          field: 'inspection_item', 
-          width: 200,
-          editable: false
-        },
-        { 
-          headerName: '要求', 
-          field: 'spec_requirement', 
-          width: 200,
-          editable: false
-        },
-        { 
-          headerName: '实际值', 
-          field: 'actual_value', 
-          width: 150,
-          editable: false
-        },
-        { 
-          headerName: '值范围', 
-          field: 'range_value', 
-          width: 150,
-          editable: false
-        },
+        { headerName: '序号', field: 'item_no', width: 80, editable: false },
+        { headerName: '检验项目', field: 'inspection_item', width: 200, editable: false },
+        { headerName: '规格要求', field: 'spec_requirement', width: 200, editable: false },
+        { headerName: '实测值', field: 'actual_value', width: 150, editable: false },
         {
-          headerName: '检验结果',
+          headerName: '判定',
           field: 'judgement',
-          width: 120,
+          width: 100,
           editable: false,
           cellRenderer: (params: any) => {
             const value = params.value
@@ -512,58 +492,111 @@ const InvoiceDetailModal = ({ isOpen, onClose, invoiceId }: InvoiceDetailModalPr
             return value || '-'
           }
         },
-        { 
-          headerName: '备注', 
-          field: 'notes', 
-          width: 200,
-          editable: false
-        }
+        { headerName: '备注', field: 'notes', width: 200, editable: false }
       ]
     }
-    // 其他检验记录表使用默认列定义
-    return [
-      { headerName: '序号', field: 'item_no', width: 80, editable: false },
-      { 
-        headerName: '检验项目', 
-        field: 'inspection_item', 
-        width: 200,
-        editable: false
-      },
-      { 
-        headerName: '规格要求', 
-        field: 'spec_requirement', 
-        width: 200,
-        editable: false
-      },
-      { 
-        headerName: '实测值', 
-        field: 'actual_value', 
-        width: 150,
-        editable: false
-      },
-      { 
-        headerName: '判定', 
-        field: 'judgement', 
-        width: 100,
-        editable: false,
-        cellRenderer: (params: any) => {
-          const value = params.value
-          if (value === 'pass') {
-            return '<span style="color: green; font-weight: bold;">合格</span>'
-          } else if (value === 'fail') {
-            return '<span style="color: red; font-weight: bold;">不合格</span>'
-          }
-          return value || '-'
+
+    const columns: ColDef[] = []
+
+    // 从items中分析实际存在的字段
+    if (items && items.length > 0) {
+      const fieldSet = new Set<string>()
+
+      // 收集所有存在的字段
+      items.forEach((item: any) => {
+        if (item && typeof item === 'object') {
+          Object.keys(item).forEach(key => {
+            fieldSet.add(key)
+          })
         }
-      },
-      { 
-        headerName: '备注', 
-        field: 'notes', 
-        width: 200,
-        editable: false
-      }
-    ]
-  }, [isDimensionInspectionModel])
+      })
+
+      // 根据字段生成列定义
+      Array.from(fieldSet).forEach(field => {
+        // 跳过一些不需要显示的字段
+        if (['id', 'invoice_id', 'created_at', 'updated_at'].includes(field)) {
+          return
+        }
+
+        // 获取Schema中的字段定义
+        const fieldSchema = schema.properties?.[field] || schema.properties?.items?.properties?.[field]
+        const fieldName = fieldSchema?.description || field
+
+        // 根据字段类型设置列宽和渲染器
+        let columnDef: ColDef = {
+          headerName: fieldName,
+          field: field,
+          editable: false
+        }
+
+        // 根据字段名设置合适的宽度
+        if (field.includes('item_no') || field.includes('序号')) {
+          columnDef.width = 80
+        } else if (field.includes('judgement') || field.includes('判定') || field.includes('结果')) {
+          columnDef.width = 120
+          columnDef.cellRenderer = (params: any) => {
+            const value = params.value
+            if (value === 'pass' || value === 'qualified' || value === '合格') {
+              return '合格'
+            } else if (value === 'fail' || value === 'unqualified' || value === '不合格') {
+              return '<span style="color: red; font-weight: bold;">不合格</span>'
+            } else if (value === 'unknown' || value === '未知') {
+              return '<span style="color: gray;">未知</span>'
+            }
+            return value || '-'
+          }
+        } else if (field.includes('notes') || field.includes('备注')) {
+          columnDef.width = 200
+        } else {
+          columnDef.width = 150
+        }
+
+        columns.push(columnDef)
+      })
+    }
+
+    // 如果没有找到字段，使用默认列
+    if (columns.length === 0) {
+      return [
+        { headerName: '序号', field: 'item_no', width: 80, editable: false },
+        { headerName: '检验项目', field: 'inspection_item', width: 200, editable: false },
+        { headerName: '规格要求', field: 'spec_requirement', width: 200, editable: false },
+        { headerName: '实测值', field: 'actual_value', width: 150, editable: false },
+        {
+          headerName: '判定',
+          field: 'judgement',
+          width: 100,
+          editable: false,
+          cellRenderer: (params: any) => {
+            const value = params.value
+            if (value === 'pass') {
+              return '合格'
+            } else if (value === 'fail') {
+              return '<span style="color: red; font-weight: bold;">不合格</span>'
+            } else if (value === 'unknown') {
+              return '<span style="color: gray;">未知</span>'
+            }
+            return value || '-'
+          }
+        },
+        { headerName: '备注', field: 'notes', width: 200, editable: false }
+      ]
+    }
+
+    return columns
+  }
+
+  // 检验记录表的列定义（根据JSON Schema动态生成）
+  const inspectionItemColumnDefs: ColDef[] = useMemo(() => {
+    // 获取发票的Schema和items数据
+    const schema = invoiceDetail?.normalized_fields?.schema ||
+                   (invoiceDetail?.template_name ? null : null) // 如果有模板，可能需要从模板获取schema
+
+    const items = invoiceDetail?.normalized_fields?.items || []
+
+    // 使用动态生成函数
+    return generateColumnDefsFromSchema(schema, items)
+  }, [invoiceDetail?.normalized_fields])
 
   const itemColumnDefs: ColDef[] = useMemo(() => {
     const currencySymbol = getCurrencySymbol(invoiceDetail?.currency)
