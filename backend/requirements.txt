@@ -6,7 +6,7 @@
  
 # Main dependencies (from pyproject.toml)
 alembic==1.17.2
-bcrypt==4.3.0
+bcrypt==5.0.0
 email-validator==2.3.0
 emails==0.6
 fastapi[standard]==0.115.14
