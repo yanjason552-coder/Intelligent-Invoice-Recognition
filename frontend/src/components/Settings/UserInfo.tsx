@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import { Box, Text, Flex, Button, Input, IconButton, Table, Badge, HStack } from "@chakra-ui/react"
-import { FiSearch, FiEdit, FiTrash2, FiPlus, FiRefreshCw, FiShield } from "react-icons/fi"
+import { FiSearch, FiEdit, FiTrash2, FiPlus, FiRefreshCw, FiShield, FiChevronDown, FiX } from "react-icons/fi"
 import { getApiUrl, getAuthHeaders } from '../../client/unifiedTypes'
 import useCustomToast from '../../hooks/useCustomToast'
 import {
@@ -22,7 +22,15 @@ interface User {
   full_name: string | null
   is_active: boolean
   is_superuser: boolean
-  company_id: string | null
+  company_id: string | null  // 保留向后兼容
+  company_ids: string[] | null  // 新增：关联的公司ID列表
+  primary_company_id: string | null  // 新增：主公司ID
+  companies: Array<{
+    id: string
+    code: string
+    name: string
+    is_primary: boolean
+  }> | null  // 新增：关联的公司详细信息列表
 }
 
 interface Company {
@@ -54,13 +62,16 @@ const UserInfo = () => {
   const [newPassword, setNewPassword] = useState("")
   const [selectedUserId, setSelectedUserId] = useState<string>("")
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([])
+  const [isCompanyDropdownOpen, setIsCompanyDropdownOpen] = useState(false)
+  const companyDropdownRef = useRef<HTMLDivElement>(null)
   const [formData, setFormData] = useState({
     email: "",
     full_name: "",
     is_active: true,
     is_superuser: false,
     password: "",
-    company_id: ""
+    company_ids: [] as string[],  // 改为数组，支持多个公司
+    primary_company_id: ""  // 主公司ID
   })
 
   const { showSuccessToast, showErrorToast } = useCustomToast()
@@ -101,10 +112,20 @@ const UserInfo = () => {
         const result = await response.json()
         if (result.data) {
           setCompanies(result.data)
+        } else {
+          console.warn('公司列表数据为空')
+          setCompanies([])
         }
+      } else {
+        const errorData = await response.json().catch(() => ({ detail: '加载公司列表失败' }))
+        console.error('加载公司列表失败:', errorData)
+        showErrorToast(errorData.detail || '加载公司列表失败')
+        setCompanies([])
       }
     } catch (error: any) {
       console.error('加载公司列表失败:', error)
+      showErrorToast(error.message || '加载公司列表失败')
+      setCompanies([])
     }
   }
 
@@ -183,6 +204,23 @@ const UserInfo = () => {
     loadRoles()
   }, [])
 
+  // 点击外部关闭下拉框
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (companyDropdownRef.current && !companyDropdownRef.current.contains(event.target as Node)) {
+        setIsCompanyDropdownOpen(false)
+      }
+    }
+
+    if (isCompanyDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside)
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [isCompanyDropdownOpen])
+
   // 当用户列表或角色列表变化时，加载所有用户的角色
   useEffect(() => {
     if (users.length > 0 && roles.length > 0) {
@@ -199,16 +237,26 @@ const UserInfo = () => {
   )
 
   // 打开新增/编辑对话框
-  const handleOpenModal = (user?: User) => {
+  const handleOpenModal = async (user?: User) => {
+    // 确保公司列表已加载
+    if (companies.length === 0) {
+      await loadCompanies()
+    }
+    
     if (user) {
       setEditingUser(user)
+      // 优先使用新的多公司字段，如果没有则使用旧的company_id
+      const companyIds = user.company_ids || (user.company_id ? [user.company_id] : [])
+      const primaryCompanyId = user.primary_company_id || user.company_id || ""
+      
       setFormData({
         email: user.email,
         full_name: user.full_name || "",
         is_active: user.is_active,
         is_superuser: user.is_superuser,
         password: "",
-        company_id: user.company_id || ""
+        company_ids: companyIds,
+        primary_company_id: primaryCompanyId
       })
     } else {
       setEditingUser(null)
@@ -218,7 +266,8 @@ const UserInfo = () => {
         is_active: true,
         is_superuser: false,
         password: "",
-        company_id: ""
+        company_ids: [],
+        primary_company_id: ""
       })
     }
     setIsOpen(true)
@@ -324,12 +373,18 @@ const UserInfo = () => {
       
       const method = editingUser ? 'PATCH' : 'POST'
       
+      // 去重 company_ids，确保没有重复值
+      const uniqueCompanyIds = formData.company_ids.length > 0 
+        ? [...new Set(formData.company_ids)]  // 使用 Set 去重
+        : null
+      
       const body: any = {
         email: formData.email,
         full_name: formData.full_name || null,
         is_active: formData.is_active,
         is_superuser: formData.is_superuser,
-        company_id: formData.company_id || null
+        company_ids: uniqueCompanyIds,
+        primary_company_id: formData.primary_company_id || null
       }
 
       if (formData.password) {
@@ -439,14 +494,48 @@ const UserInfo = () => {
           </Table.Header>
           <Table.Body>
             {filteredUsers.map((user) => {
-              const userCompany = companies.find(c => c.id === user.company_id)
+              // 优先使用新的多公司字段，如果没有则使用旧的company_id
+              const userCompanyIds = user.company_ids || (user.company_id ? [user.company_id] : [])
+              const userCompanyList = userCompanyIds
+                .map(id => companies.find(c => c.id === id))
+                .filter(Boolean) as Company[]
+              const primaryCompanyId = user.primary_company_id || user.company_id
+              const primaryCompany = companies.find(c => c.id === primaryCompanyId)
               const userRoleList = userRoles[user.id] || []
               return (
                 <Table.Row key={user.id}>
                   <Table.Cell>{user.email}</Table.Cell>
                   <Table.Cell>{user.full_name || '-'}</Table.Cell>
-                  <Table.Cell>{userCompany ? userCompany.name : '-'}</Table.Cell>
-                  <Table.Cell>{userCompany ? userCompany.code : '-'}</Table.Cell>
+                  <Table.Cell>
+                    {userCompanyList.length > 0 ? (
+                      <HStack gap={1} flexWrap="wrap">
+                        {userCompanyList.map(company => (
+                          <Badge 
+                            key={company.id} 
+                            colorScheme={company.id === primaryCompanyId ? "blue" : "gray"}
+                          >
+                            {company.name}
+                            {company.id === primaryCompanyId && " (主)"}
+                          </Badge>
+                        ))}
+                      </HStack>
+                    ) : '-'}
+                  </Table.Cell>
+                  <Table.Cell>
+                    {userCompanyList.length > 0 ? (
+                      <HStack gap={1} flexWrap="wrap">
+                        {userCompanyList.map(company => (
+                          <Badge 
+                            key={company.id} 
+                            colorScheme={company.id === primaryCompanyId ? "blue" : "gray"}
+                          >
+                            {company.code}
+                            {company.id === primaryCompanyId && " (主)"}
+                          </Badge>
+                        ))}
+                      </HStack>
+                    ) : '-'}
+                  </Table.Cell>
                   <Table.Cell>
                     {userRoleList.length > 0 ? (
                       <HStack gap={1} flexWrap="wrap">
@@ -550,21 +639,177 @@ const UserInfo = () => {
                 />
               </Field>
 
-              <Field mb={4} label="公司">
-                <Box as="select"
-                  value={formData.company_id}
-                  onChange={(e) => setFormData({ ...formData, company_id: e.target.value })}
-                  w="100%"
-                  p={2}
-                  border="1px"
-                  borderColor="gray.300"
-                  borderRadius="md"
-                >
-                  <option value="">请选择公司</option>
-                  {companies.map(company => (
-                    <option key={company.id} value={company.id}>{company.name}</option>
-                  ))}
-                </Box>
+              <Field mb={4} label="关联公司（可多选）">
+                {companies.length === 0 ? (
+                  <Text fontSize="sm" color="gray.500">正在加载公司列表...</Text>
+                ) : (
+                  <Box position="relative" ref={companyDropdownRef}>
+                    {/* 多选下拉框按钮 */}
+                    <Button
+                      w="100%"
+                      justifyContent="space-between"
+                      onClick={() => setIsCompanyDropdownOpen(!isCompanyDropdownOpen)}
+                      rightIcon={<FiChevronDown />}
+                      variant="outline"
+                    >
+                      {formData.company_ids.length === 0 
+                        ? "请选择公司" 
+                        : `${formData.company_ids.length} 个公司已选择`}
+                    </Button>
+                    
+                    {/* 下拉选项列表 */}
+                    {isCompanyDropdownOpen && (
+                      <Box
+                        position="absolute"
+                        top="100%"
+                        left={0}
+                        right={0}
+                        mt={1}
+                        bg="white"
+                        border="1px solid"
+                        borderColor="gray.300"
+                        borderRadius="md"
+                        boxShadow="lg"
+                        zIndex={1000}
+                        maxH="300px"
+                        overflowY="auto"
+                      >
+                      {companies.map(company => {
+                        const isSelected = formData.company_ids.includes(company.id)
+                        const isPrimary = formData.primary_company_id === company.id
+                        return (
+                          <Box
+                            key={company.id}
+                            p={3}
+                            cursor="pointer"
+                            bg={isSelected ? "blue.50" : "white"}
+                            _hover={{ bg: "gray.50" }}
+                            borderBottom="1px solid"
+                            borderColor="gray.200"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (isSelected) {
+                                // 移除公司
+                                const newCompanyIds = formData.company_ids.filter(id => id !== company.id)
+                                let newPrimaryId = formData.primary_company_id
+                                if (company.id === formData.primary_company_id) {
+                                  newPrimaryId = newCompanyIds.length > 0 ? newCompanyIds[0] : ""
+                                }
+                                setFormData({
+                                  ...formData,
+                                  company_ids: newCompanyIds,
+                                  primary_company_id: newPrimaryId
+                                })
+                              } else {
+                                // 添加公司
+                                const newCompanyIds = [...formData.company_ids, company.id]
+                                const newPrimaryId = formData.company_ids.length === 0 
+                                  ? company.id 
+                                  : formData.primary_company_id
+                                setFormData({
+                                  ...formData,
+                                  company_ids: newCompanyIds,
+                                  primary_company_id: newPrimaryId
+                                })
+                              }
+                            }}
+                          >
+                            <Flex align="center" justify="space-between">
+                              <Flex align="center" gap={2}>
+                                <Box
+                                  w={4}
+                                  h={4}
+                                  border="2px solid"
+                                  borderColor={isSelected ? "blue.500" : "gray.300"}
+                                  bg={isSelected ? "blue.500" : "white"}
+                                  borderRadius="sm"
+                                  display="flex"
+                                  alignItems="center"
+                                  justifyContent="center"
+                                >
+                                  {isSelected && (
+                                    <Text color="white" fontSize="xs">✓</Text>
+                                  )}
+                                </Box>
+                                <Text fontSize="sm">
+                                  {company.name} ({company.code})
+                                </Text>
+                              </Flex>
+                              {isSelected && (
+                                <Button
+                                  size="xs"
+                                  colorScheme={isPrimary ? "blue" : "gray"}
+                                  variant={isPrimary ? "solid" : "outline"}
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setFormData({
+                                      ...formData,
+                                      primary_company_id: company.id
+                                    })
+                                  }}
+                                >
+                                  {isPrimary ? "主公司" : "设为主公司"}
+                                </Button>
+                              )}
+                            </Flex>
+                          </Box>
+                        )
+                      })}
+                      </Box>
+                    )}
+                    
+                    {/* 已选择的公司标签 */}
+                    {formData.company_ids.length > 0 && (
+                      <Flex wrap="wrap" gap={2} mt={2}>
+                        {formData.company_ids.map(companyId => {
+                          const company = companies.find(c => c.id === companyId)
+                          if (!company) return null
+                          const isPrimary = formData.primary_company_id === companyId
+                          return (
+                            <Badge
+                              key={companyId}
+                              colorScheme={isPrimary ? "blue" : "gray"}
+                              p={2}
+                              borderRadius="md"
+                              display="flex"
+                              alignItems="center"
+                              gap={1}
+                            >
+                              <Text>{company.name} ({company.code})</Text>
+                              {isPrimary && <Text fontSize="xs">(主)</Text>}
+                              <IconButton
+                                aria-label="移除"
+                                icon={<FiX />}
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => {
+                                  const newCompanyIds = formData.company_ids.filter(id => id !== companyId)
+                                  let newPrimaryId = formData.primary_company_id
+                                  if (companyId === formData.primary_company_id) {
+                                    newPrimaryId = newCompanyIds.length > 0 ? newCompanyIds[0] : ""
+                                  }
+                                  setFormData({
+                                    ...formData,
+                                    company_ids: newCompanyIds,
+                                    primary_company_id: newPrimaryId
+                                  })
+                                }}
+                              />
+                            </Badge>
+                          )
+                        })}
+                      </Flex>
+                    )}
+                    
+                    {/* 提示信息 */}
+                    {formData.company_ids.length === 0 && (
+                      <Text fontSize="sm" color="gray.500" mt={2}>请至少选择一个公司</Text>
+                    )}
+                    {formData.company_ids.length > 0 && !formData.primary_company_id && (
+                      <Text fontSize="sm" color="orange.500" mt={2}>请选择一个主公司</Text>
+                    )}
+                  </Box>
+                )}
               </Field>
 
               <Flex justify="flex-end" gap={2} mt={4}>

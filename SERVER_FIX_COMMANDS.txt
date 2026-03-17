@@ -1,0 +1,94 @@
+==========================================
+服务器修复命令（直接复制执行）
+==========================================
+
+请使用SSH客户端连接服务器后，复制以下命令执行：
+
+ssh -p 50518 root@8.145.33.61
+密码: 6b3fPk9n!
+
+然后在服务器上执行以下命令：
+
+==========================================
+一键修复命令（复制全部执行）
+==========================================
+
+cd /opt && git clone https://github.com/yanjason552-coder/Intelligent-Invoice-Recognition.git invoice-app 2>/dev/null || cd invoice-app && git pull
+cd invoice-app
+chmod +x scripts/aliyun/fix-and-retry-deploy.sh
+bash scripts/aliyun/fix-and-retry-deploy.sh
+
+==========================================
+或者分步执行
+==========================================
+
+# 步骤1: 配置Docker镜像加速器
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json << 'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://hub-mirror.c.163.com",
+    "https://mirror.baidubce.com",
+    "https://dockerhub.azk8s.cn"
+  ],
+  "max-concurrent-downloads": 10
+}
+EOF
+systemctl daemon-reload
+systemctl restart docker
+sleep 5
+
+# 步骤2: 测试拉取镜像
+docker pull python:3.10 || docker pull python:3.10-slim
+
+# 步骤3: 确保项目存在
+cd /opt
+git clone https://github.com/yanjason552-coder/Intelligent-Invoice-Recognition.git invoice-app 2>/dev/null || (cd invoice-app && git pull)
+cd invoice-app
+
+# 步骤4: 配置环境变量
+if [ ! -f .env ]; then
+SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))" 2>/dev/null || openssl rand -base64 32)
+cat > .env << ENVEOF
+PROJECT_NAME=智能发票识别系统
+ENVIRONMENT=production
+DOMAIN=8.145.33.61
+STACK_NAME=invoice-app-production
+FRONTEND_HOST=dashboard.8.145.33.61
+DOCKER_IMAGE_BACKEND=invoice-app-backend
+DOCKER_IMAGE_FRONTEND=invoice-app-frontend
+TAG=latest
+SECRET_KEY=$SECRET_KEY
+FIRST_SUPERUSER=admin@example.com
+FIRST_SUPERUSER_PASSWORD=admin123456
+POSTGRES_SERVER=8.145.33.61
+POSTGRES_PORT=50511
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres123
+POSTGRES_DB=invoice_db
+REDIS_PASSWORD=
+BACKEND_CORS_ORIGINS=http://8.145.33.61:5173,http://localhost:5173,http://8.145.33.61:8000
+TRAEFIK_USERNAME=admin
+TRAEFIK_PASSWORD=admin123456
+TRAEFIK_EMAIL=admin@example.com
+ENVEOF
+fi
+
+# 步骤5: 构建镜像
+cd backend && docker build -t invoice-app-backend:latest . && cd ..
+cd frontend && docker build --build-arg VITE_API_URL=http://8.145.33.61:8000 -t invoice-app-frontend:latest . && cd ..
+
+# 步骤6: 部署服务
+docker network create traefik-public 2>/dev/null || true
+if [ -f docker-compose.production.external-db.yml ]; then
+    docker compose -f docker-compose.yml -f docker-compose.production.external-db.yml --profile no-db up -d redis prestart backend frontend adminer
+else
+    docker compose -f docker-compose.yml up -d redis prestart backend frontend adminer
+fi
+
+sleep 15
+docker compose ps
+
+echo "修复完成！访问 http://8.145.33.61:8000/docs"
+

@@ -19,8 +19,13 @@ OpenAPI.TOKEN = async () => {
 
 const handleApiError = (error: Error) => {
   if (error instanceof ApiError && [401, 403].includes(error.status)) {
+    console.warn(`认证失败 (${error.status}):`, error.message)
+    // 清除过期的 token
     localStorage.removeItem("access_token")
-    window.location.href = "/login"
+    // 避免重复跳转
+    if (window.location.pathname !== "/login") {
+      window.location.href = "/login"
+    }
   }
 }
 const queryClient = new QueryClient({

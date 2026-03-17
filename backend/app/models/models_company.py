@@ -2,7 +2,24 @@ import uuid
 from typing import Optional
 from datetime import datetime
 from sqlmodel import Field, Relationship, SQLModel
-from sqlalchemy import Column, DateTime
+from sqlalchemy import Column, DateTime, Table, ForeignKey
+
+
+# ==================== 用户公司关联表（多对多）====================
+
+class UserCompany(SQLModel, table=True):
+    """用户公司关联表 - 实现用户和公司的多对多关系"""
+    __tablename__ = "user_company"
+    
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
+    user_id: uuid.UUID = Field(foreign_key="user.id", description="用户ID")
+    company_id: uuid.UUID = Field(foreign_key="company.id", description="公司ID")
+    is_primary: bool = Field(default=False, description="是否为主公司（一个用户只能有一个主公司）")
+    create_time: datetime = Field(default_factory=datetime.now, sa_column=Column(DateTime), description="关联时间")
+    
+    # 关联关系
+    user: "User" = Relationship(back_populates="user_companies")
+    company: "Company" = Relationship(back_populates="user_companies")
 
 
 # ==================== 公司模型 ====================
@@ -45,8 +62,8 @@ class Company(CompanyBase, table=True):
     # 时间字段
     create_time: datetime = Field(default_factory=datetime.now, sa_column=Column(DateTime), description="创建时间")
     
-    # 关联关系
-    users: list["User"] = Relationship(back_populates="company")
+    # 关联关系（多对多）
+    user_companies: list["UserCompany"] = Relationship(back_populates="company")
 
 
 class CompanyPublic(CompanyBase):

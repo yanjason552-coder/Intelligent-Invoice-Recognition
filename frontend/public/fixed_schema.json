@@ -1,0 +1,42 @@
+{
+  "invoice_title": "string",
+  "invoice_no": "string",
+  "purchase_order": "string",
+  "reference_order": "string",
+  "supplier_no": "string",
+  "docdate": "string",
+  "buyer_info": {
+    "name": "string",
+    "tax_id": "string",
+    "company_code": "string"
+  },
+  "seller_info": {
+    "name": "string",
+    "tax_id": "string"
+  },
+  "items": [
+    {
+      "LineId": "string",
+      "name": "string",
+      "part_no": "string",
+      "supplier_partno": "string",
+      "po_no": "string",
+      "unit": "string",
+      "quantity": "number | null",
+      "unit_price": "number | null",
+      "amount": "number",
+      "tax_rate": "string",
+      "tax_amount": "number"
+    }
+  ],
+  "total_amount_exclusive_tax": "number",
+  "currency": "string",
+  "total_tax_amount": "number",
+  "total_amount_inclusive_tax": {
+    "in_words": "string",
+    "in_figures": "number"
+  },
+  "remarks": "string",
+  "issuer": "string"
+}
+

@@ -35,14 +35,15 @@ except ImportError:
 
 # 改进的连接参数，增强网络稳定性
 # 针对远程数据库服务器的优化配置
+# 注意：对于高延迟网络（如平均58ms），需要更长的连接超时时间
 connect_args = {
-    "connect_timeout": 10,        # 连接超时（10秒）
+    "connect_timeout": 30,        # 连接超时（30秒，增加以应对高延迟网络）
     "options": "-c statement_timeout=300000 -c application_name=invoice_pdf_api",  # 5分钟语句超时和应用名称
     "keepalives": 1,             # 启用TCP保活
     "keepalives_idle": 30,       # 30秒后开始保活
     "keepalives_interval": 10,   # 保活间隔10秒
     "keepalives_count": 5,       # 最多5次保活尝试
-    "tcp_user_timeout": 30000,   # TCP用户超时（30秒）
+    "tcp_user_timeout": 60000,   # TCP用户超时（60秒，增加以应对不稳定网络）
 }
 
 # 创建数据库引擎，配置连接池和自动重连机制
@@ -116,14 +117,19 @@ try:
     
     # 测试连接是否可用（不阻塞启动）
     def test_connection_async():
-        """异步测试连接"""
+        """异步测试连接，使用更长的超时时间"""
+        import time
         try:
+            # 对于远程数据库，给更多时间建立连接
+            start_time = time.time()
             with engine.connect() as test_conn:
                 test_conn.exec_driver_sql("SELECT 1")
-            logger.info("数据库连接测试成功")
+            elapsed = time.time() - start_time
+            logger.info(f"数据库连接测试成功 (耗时: {elapsed:.2f}秒)")
         except Exception as test_error:
-            logger.warning(f"数据库连接测试失败: {test_error}")
-            logger.info("引擎已创建，将在实际使用时自动重连")
+            elapsed = time.time() - start_time if 'start_time' in locals() else 0
+            logger.warning(f"数据库连接测试失败 (耗时: {elapsed:.2f}秒): {test_error}")
+            logger.info("引擎已创建，将在实际使用时自动重连（pool_pre_ping=True）")
     
     # 在后台测试连接（不阻塞）
     import threading

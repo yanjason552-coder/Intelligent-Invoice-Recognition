@@ -178,6 +178,7 @@ from app.models.models_company import (
     CompanyUpdate,
     CompanyPublic,
     CompaniesPublic,
+    UserCompany,  # 用户公司关联表
 )
 
 # 从基础模型导入类型别名（如果存在）

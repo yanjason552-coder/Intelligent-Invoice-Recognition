@@ -230,6 +230,12 @@ General development docs: [development.md](./development.md).
 
 This includes using Docker Compose, custom local domains, `.env` configurations, etc.
 
+## Git Worktree
+
+For parallel development workflows, see [GIT_WORKTREE_GUIDE.md](./GIT_WORKTREE_GUIDE.md).
+
+This guide covers how to use Git worktree for parallel feature development, hotfixes, testing different versions, and managing multiple development environments.
+
 ## Release Notes
 
 Check the file [release-notes.md](./release-notes.md).

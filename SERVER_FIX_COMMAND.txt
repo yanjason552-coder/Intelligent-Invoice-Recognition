@@ -1,0 +1,223 @@
+==========================================
+Docker镜像加速器修复命令
+==========================================
+
+请在服务器上执行以下命令来修复镜像加速器问题：
+
+# 1. 修复Docker镜像加速器配置
+cat > /etc/docker/daemon.json << 'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://hub-mirror.c.163.com",
+    "https://mirror.baidubce.com"
+  ],
+  "max-concurrent-downloads": 10,
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+EOF
+
+# 2. 重启Docker服务
+systemctl daemon-reload
+systemctl restart docker
+sleep 8
+
+# 3. 验证配置
+docker info | grep -A 5 "Registry Mirrors"
+
+# 4. 测试拉取镜像
+docker pull python:3.10 || docker pull python:3.10-slim
+docker pull node:20 || docker pull node:20-slim
+docker pull nginx:1 || docker pull nginx:latest
+
+# 5. 清理构建缓存
+docker builder prune -f
+
+# 6. 重新构建镜像
+cd /opt/invoice-app
+docker build -t invoice-app-backend:latest backend/
+docker build --build-arg VITE_API_URL=http://8.145.33.61:8000 -t invoice-app-frontend:latest frontend/
+
+# 7. 重新部署
+docker compose -f docker-compose.yml down
+docker compose -f docker-compose.yml up -d redis prestart backend frontend adminer
+
+# 8. 检查服务状态
+docker compose ps
+
+==========================================
+一键修复脚本（推荐）
+==========================================
+
+或者直接执行以下命令创建并运行修复脚本：
+
+cd /opt/invoice-app
+mkdir -p scripts/aliyun
+cat > scripts/aliyun/fix-mirror-and-retry.sh << 'SCRIPT_EOF'
+#!/bin/bash
+set -e
+
+SERVER_IP="8.145.33.61"
+DB_HOST="8.145.33.61"
+DB_PORT="50511"
+DB_USER="postgres"
+DB_PASSWORD="postgres123"
+DB_NAME="invoice_db"
+
+echo "=========================================="
+echo "修复Docker镜像加速器并重新部署"
+echo "=========================================="
+echo ""
+
+# 修复Docker镜像加速器配置
+echo "[1/7] 修复Docker镜像加速器配置..."
+mkdir -p /etc/docker
+if [ -f /etc/docker/daemon.json ]; then
+    cp /etc/docker/daemon.json /etc/docker/daemon.json.bak.$(date +%Y%m%d_%H%M%S)
+fi
+
+cat > /etc/docker/daemon.json << 'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.mirrors.ustc.edu.cn",
+    "https://hub-mirror.c.163.com",
+    "https://mirror.baidubce.com"
+  ],
+  "max-concurrent-downloads": 10,
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+EOF
+
+systemctl daemon-reload
+systemctl restart docker
+sleep 8
+docker info | grep -A 5 "Registry Mirrors" || echo "配置可能未完全生效，但可以继续"
+echo "✓ Docker镜像加速器配置完成"
+echo ""
+
+# 测试拉取基础镜像
+echo "[2/7] 测试拉取基础镜像..."
+docker pull python:3.10 || docker pull python:3.10-slim || echo "警告: python镜像拉取失败"
+docker pull node:20 || docker pull node:20-slim || echo "警告: node镜像拉取失败"
+docker pull nginx:1 || docker pull nginx:latest || echo "警告: nginx镜像拉取失败"
+echo ""
+
+# 清理Docker构建缓存
+echo "[3/7] 清理Docker构建缓存..."
+docker builder prune -f || true
+echo "✓ 缓存清理完成"
+echo ""
+
+# 检查项目目录
+echo "[4/7] 检查项目目录..."
+cd /opt/invoice-app
+git pull || echo "Git pull失败，继续使用现有代码"
+echo "✓ 项目目录准备完成"
+echo ""
+
+# 配置环境变量
+echo "[5/7] 配置环境变量..."
+if [ ! -f .env ]; then
+    SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))" 2>/dev/null || openssl rand -base64 32)
+    cat > .env << ENV_EOF
+PROJECT_NAME=智能发票识别系统
+ENVIRONMENT=production
+DOMAIN=$SERVER_IP
+STACK_NAME=invoice-app-production
+FRONTEND_HOST=dashboard.$SERVER_IP
+DOCKER_IMAGE_BACKEND=invoice-app-backend
+DOCKER_IMAGE_FRONTEND=invoice-app-frontend
+TAG=latest
+SECRET_KEY=$SECRET_KEY
+FIRST_SUPERUSER=admin@example.com
+FIRST_SUPERUSER_PASSWORD=admin123456
+POSTGRES_SERVER=$DB_HOST
+POSTGRES_PORT=$DB_PORT
+POSTGRES_USER=$DB_USER
+POSTGRES_PASSWORD=$DB_PASSWORD
+POSTGRES_DB=$DB_NAME
+REDIS_PASSWORD=
+BACKEND_CORS_ORIGINS=http://$SERVER_IP:5173,http://localhost:5173,http://$SERVER_IP:8000
+TRAEFIK_USERNAME=admin
+TRAEFIK_PASSWORD=admin123456
+TRAEFIK_EMAIL=admin@example.com
+ENV_EOF
+    echo "✓ 环境变量文件已创建"
+else
+    echo "✓ 环境变量文件已存在"
+fi
+echo ""
+
+# 构建Docker镜像
+echo "[6/7] 构建Docker镜像..."
+cd backend
+if docker build -t invoice-app-backend:latest . 2>&1 | tee /tmp/backend-build.log; then
+    echo "✓ 后端镜像构建成功"
+else
+    echo "构建失败，尝试清理缓存后重建..."
+    docker builder prune -f
+    docker build --no-cache -t invoice-app-backend:latest . || {
+        echo "错误: 后端镜像构建失败"
+        exit 1
+    }
+fi
+cd ..
+
+cd frontend
+if docker build --build-arg VITE_API_URL=http://$SERVER_IP:8000 -t invoice-app-frontend:latest . 2>&1 | tee /tmp/frontend-build.log; then
+    echo "✓ 前端镜像构建成功"
+else
+    echo "构建失败，尝试清理缓存后重建..."
+    docker builder prune -f
+    docker build --no-cache --build-arg VITE_API_URL=http://$SERVER_IP:8000 -t invoice-app-frontend:latest . || {
+        echo "错误: 前端镜像构建失败"
+        exit 1
+    }
+fi
+cd ..
+echo ""
+
+# 部署服务
+echo "[7/7] 部署服务..."
+cd /opt/invoice-app
+docker compose -f docker-compose.yml down 2>/dev/null || true
+docker network create traefik-public 2>/dev/null || true
+
+if [ -f docker-compose.production.external-db.yml ]; then
+    COMPOSE_FILES="-f docker-compose.yml -f docker-compose.production.external-db.yml"
+    PROFILE="--profile no-db"
+    echo "使用外部数据库配置"
+else
+    COMPOSE_FILES="-f docker-compose.yml"
+    PROFILE=""
+    echo "使用标准配置"
+fi
+
+docker compose $COMPOSE_FILES $PROFILE up -d redis prestart backend frontend adminer || \
+docker compose $COMPOSE_FILES up -d redis prestart backend frontend adminer
+
+sleep 20
+docker compose $COMPOSE_FILES ps || docker compose ps
+
+echo ""
+echo "=========================================="
+echo "修复和部署完成！"
+echo "=========================================="
+echo ""
+echo "访问地址:"
+echo "  前端: http://$SERVER_IP:5173"
+echo "  API文档: http://$SERVER_IP:8000/docs"
+echo ""
+SCRIPT_EOF
+
+chmod +x scripts/aliyun/fix-mirror-and-retry.sh
+bash scripts/aliyun/fix-mirror-and-retry.sh
+

@@ -19,7 +19,8 @@ class UserBase(SQLModel):
 # Properties to receive via API on creation
 class UserCreate(UserBase):
     password: str = Field(min_length=8, max_length=40)
-    company_id: uuid.UUID | None = Field(default=None, description="公司ID")
+    company_ids: list[uuid.UUID] | None = Field(default=None, description="公司ID列表（支持多个公司）")
+    primary_company_id: uuid.UUID | None = Field(default=None, description="主公司ID（从company_ids中选择一个）")
 
 
 class UserRegister(SQLModel):
@@ -32,7 +33,8 @@ class UserRegister(SQLModel):
 class UserUpdate(UserBase):
     email: EmailStr | None = Field(default=None, max_length=255)  # type: ignore
     password: str | None = Field(default=None, min_length=8, max_length=40)
-    company_id: uuid.UUID | None = Field(default=None, description="公司ID")
+    company_ids: list[uuid.UUID] | None = Field(default=None, description="公司ID列表（支持多个公司）")
+    primary_company_id: uuid.UUID | None = Field(default=None, description="主公司ID（从company_ids中选择一个）")
 
 
 class UserUpdateMe(SQLModel):
@@ -49,16 +51,19 @@ class UpdatePassword(SQLModel):
 class User(UserBase, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     hashed_password: str
-    company_id: uuid.UUID | None = Field(default=None, foreign_key="company.id", description="公司ID")
+    # 移除 company_id，改用多对多关系
     items: list["Item"] = Relationship(back_populates="owner", cascade_delete=True)
     user_roles: list["UserRole"] = Relationship(back_populates="user", cascade_delete=True)
-    company: Optional["Company"] = Relationship(back_populates="users")
+    # 多对多关系：通过 UserCompany 中间表关联多个公司
+    user_companies: list["UserCompany"] = Relationship(back_populates="user", cascade_delete=True)
 
 
 # Properties to return via API, id is always required
 class UserPublic(UserBase):
     id: uuid.UUID
-    company_id: uuid.UUID | None = Field(default=None, description="公司ID")
+    company_ids: list[uuid.UUID] | None = Field(default=None, description="关联的公司ID列表")
+    primary_company_id: uuid.UUID | None = Field(default=None, description="主公司ID")
+    companies: list[dict] | None = Field(default=None, description="关联的公司详细信息列表")
 
 
 class UsersPublic(SQLModel):

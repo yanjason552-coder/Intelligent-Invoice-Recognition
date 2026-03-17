@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dimension_inspection_record",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "doc_type": {
+      "type": "string",
+      "const": "dimension_inspection",
+      "description": "文档类型"
+    },
+    "form_title": {
+      "type": ["string", "null"],
+      "description": "表单标题/名称；图片没有明确出现则为 null"
+    },
+    "drawing_no": {
+      "type": ["string", "null"],
+      "description": "图号/图纸编号/项目号（若能识别）"
+    },
+    "part_name": {
+      "type": ["string", "null"],
+      "description": "零件名称（若能识别）"
+    },
+    "part_no": {
+      "type": ["string", "null"],
+      "description": "零件号/编号（若能识别）"
+    },
+    "date": {
+      "type": ["string", "null"],
+      "description": "日期，建议输出 YYYY-MM-DD；若无法规范化则保留原字符串"
+    },
+    "inspector_name": {
+      "type": ["string", "null"],
+      "description": "检验员/检验员签字（手写名）"
+    },
+    "overall_result": {
+      "type": "string",
+      "enum": ["pass", "fail", "unknown"],
+      "description": "整单结论（若表上有总体合格/不合格，否则 unknown）"
+    },
+    "remarks": {
+      "type": ["string", "null"],
+      "description": "备注（如有）"
+    },
+    "items": {
+      "type": "array",
+      "description": "明细行（每个检验项一行）",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "item_no": {
+            "type": ["integer", "null"],
+            "description": "序号（如 4、5、6...）；若无法识别可为 null"
+          },
+          "inspection_item": {
+            "type": ["string", "null"],
+            "description": "检验项目/检验项名称"
+          },
+          "spec_requirement": {
+            "type": ["string", "null"],
+            "description": "要求/规格（尽量保留φ、±、深、M螺纹等符号）"
+          },
+          "actual_value": {
+            "type": ["string", "null"],
+            "description": "实际值（可能是数值/多个数值/OK/角度测点组合；优先保留原含义）"
+          },
+          "judgement": {
+            "type": "string",
+            "enum": ["pass", "fail", "unknown"],
+            "description": "判定：根据合格/不合格勾选框"
+          },
+          "measurements": {
+            "type": "array",
+            "description": "可选：如果能明确拆分多个测点/角度值，请填入",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "angle": {
+                  "type": ["string", "null"],
+                  "description": "角度，如 0°, 90°, 180°；不确定则 null"
+                },
+                "point_label": {
+                  "type": ["string", "null"],
+                  "description": "测点标签，如 A点/B点/上/下/左/右；不确定则 null"
+                },
+                "value": {
+                  "type": ["string", "null"],
+                  "description": "该测点的实测值（保持原文）"
+                }
+              },
+              "required": ["angle", "point_label", "value"]
+            },
+            "default": []
+          },
+          "notes": {
+            "type": ["string", "null"],
+            "description": "该行备注（若有）"
+          }
+        },
+        "required": [
+          "item_no",
+          "inspection_item",
+          "spec_requirement",
+          "actual_value",
+          "judgement",
+          "measurements",
+          "notes"
+        ]
+      },
+      "default": []
+    }
+  },
+  "required": [
+    "doc_type",
+    "form_title",
+    "drawing_no",
+    "part_name",
+    "part_no",
+    "date",
+    "inspector_name",
+    "overall_result",
+    "remarks",
+    "items"
+  ]
+}

@@ -137,62 +137,157 @@ def update_template(
     
     # 更新字段（如果提供了fields字段）
     if "fields" in body and isinstance(body["fields"], list):
-        # 确保模板有当前版本
-        if not template.current_version_id:
-            # 如果没有版本，创建一个新版本
-            version = TemplateVersion(
-                template_id=template_id,
-                version="1.0.0",
-                status="draft",
-                creator_id=current_user.id
-            )
-            session.add(version)
-            session.flush()
-            template.current_version_id = version.id
-        
-        # 删除旧字段
-        old_fields = session.exec(
-            select(TemplateField).where(
-                TemplateField.template_version_id == template.current_version_id
-            )
-        ).all()
-        for old_field in old_fields:
-            session.delete(old_field)
-        
-        # 创建新字段
-        for idx, field_data in enumerate(body["fields"]):
-            # 处理 parent_field_id 的 UUID 转换
-            parent_field_id = None
-            if field_data.get("parent_field_id"):
-                try:
-                    parent_field_id = UUID(field_data["parent_field_id"])
-                except (ValueError, TypeError):
-                    parent_field_id = None
+        try:
+            # 确保模板有当前版本
+            if not template.current_version_id:
+                # 如果没有版本，创建一个新版本
+                version = TemplateVersion(
+                    template_id=template_id,
+                    version="1.0.0",
+                    status="draft",
+                    creator_id=current_user.id
+                )
+                session.add(version)
+                session.flush()
+                template.current_version_id = version.id
             
-            data_type_value = field_data.get("data_type", "string")
-            sort_order_value = field_data.get("sort_order", idx)
-            field = TemplateField(
-                template_id=template_id,  # 添加必需的 template_id
-                template_version_id=template.current_version_id,
-                field_key=field_data.get("field_key", ""),
-                field_code=field_data.get("field_key", ""),
-                field_name=field_data.get("field_name", ""),
-                data_name=field_data.get("data_name"),
-                data_type=data_type_value,
-                field_type=data_type_value,  # field_type 是 data_type 的兼容字段，必须设置
-                is_required=field_data.get("is_required", False),
-                required=field_data.get("is_required", False),  # required 是 is_required 的兼容字段
-                description=field_data.get("description"),
-                example=field_data.get("example"),
-                validation=field_data.get("validation"),
-                normalize=field_data.get("normalize"),
-                prompt_hint=field_data.get("prompt_hint"),
-                confidence_threshold=field_data.get("confidence_threshold"),
-                sort_order=sort_order_value,
-                display_order=sort_order_value,  # display_order 必须设置，使用与 sort_order 相同的值
-                parent_field_id=parent_field_id
-            )
-            session.add(field)
+            # 删除旧字段
+            old_fields = session.exec(
+                select(TemplateField).where(
+                    TemplateField.template_version_id == template.current_version_id
+                )
+            ).all()
+            for old_field in old_fields:
+                session.delete(old_field)
+            session.flush()  # 确保删除操作完成
+            
+            # 第一遍：创建所有字段（不设置 parent_field_id）
+            # 建立 field_key 到字段对象的映射，用于后续建立 parent_field_id 关系
+            field_key_to_field_map: dict[str, TemplateField] = {}
+            # 同时建立前端传入的 parent_field_id（可能是临时ID或field_key）到字段的映射
+            parent_ref_to_field_map: dict[str, TemplateField] = {}
+            
+            # 按 sort_order 排序字段，确保父字段在子字段之前
+            sorted_fields_data = sorted(body["fields"], key=lambda x: x.get("sort_order", 999999))
+            
+            logger.info(f"开始保存 {len(sorted_fields_data)} 个字段")
+            
+            # 先创建所有字段（不设置 parent_field_id）
+            for idx, field_data in enumerate(sorted_fields_data):
+                try:
+                    data_type_value = field_data.get("data_type", "string")
+                    sort_order_value = field_data.get("sort_order", idx)
+                    field_key = field_data.get("field_key", "")
+                    
+                    if not field_key:
+                        logger.warning(f"跳过没有 field_key 的字段，索引: {idx}")
+                        continue
+                    
+                    field = TemplateField(
+                        template_id=template_id,  # 添加必需的 template_id
+                        template_version_id=template.current_version_id,
+                        field_key=field_key,
+                        field_code=field_key,
+                        field_name=field_data.get("field_name", "") or "",  # 确保保存 field_name
+                        data_type=data_type_value,
+                        field_type=data_type_value,  # field_type 是 data_type 的兼容字段，必须设置
+                        is_required=field_data.get("is_required", False),
+                        required=field_data.get("is_required", False),  # required 是 is_required 的兼容字段
+                        description=field_data.get("description"),
+                        example=field_data.get("example"),
+                        validation=field_data.get("validation"),
+                        normalize=field_data.get("normalize"),
+                        prompt_hint=field_data.get("prompt_hint"),
+                        confidence_threshold=field_data.get("confidence_threshold"),
+                        sort_order=sort_order_value,
+                        display_order=sort_order_value,  # display_order 必须设置，使用与 sort_order 相同的值
+                        parent_field_id=None  # 先不设置，稍后更新
+                    )
+                    session.add(field)
+                    session.flush()  # 刷新以获取字段的数据库ID
+                    
+                    # 建立映射
+                    if field_key:
+                        field_key_to_field_map[field_key] = field
+                    # 如果前端传入了ID（临时ID），也建立映射
+                    if field_data.get("id"):
+                        parent_ref_to_field_map[str(field_data.get("id"))] = field
+                except Exception as e:
+                    logger.error(f"创建字段失败，field_key: {field_data.get('field_key', 'unknown')}, 错误: {str(e)}", exc_info=True)
+                    raise
+            
+            logger.info(f"成功创建 {len(field_key_to_field_map)} 个字段")
+            
+            # 第二遍：更新 parent_field_id（根据 field_key 或前端传入的ID建立关系）
+            parent_relation_count = 0
+            for idx, field_data in enumerate(sorted_fields_data):
+                try:
+                    field_key = field_data.get("field_key", "")
+                    parent_ref = field_data.get("parent_field_id")  # 可能是UUID字符串、临时ID或field_key
+                    
+                    if not parent_ref or not field_key:
+                        continue
+                    
+                    # 查找当前字段
+                    current_field = field_key_to_field_map.get(field_key)
+                    if not current_field:
+                        continue
+                    
+                    # 尝试通过多种方式查找父字段
+                    parent_field = None
+                    
+                    # 方式1：如果 parent_ref 是 UUID 字符串，尝试直接使用
+                    try:
+                        parent_uuid = UUID(str(parent_ref))
+                        # 在已创建的字段中查找
+                        parent_field = next((f for f in field_key_to_field_map.values() if f.id == parent_uuid), None)
+                    except (ValueError, TypeError):
+                        pass
+                    
+                    # 方式2：如果 parent_ref 是临时ID，通过映射查找
+                    if not parent_field:
+                        parent_field = parent_ref_to_field_map.get(str(parent_ref))
+                    
+                    # 方式3：如果 parent_ref 是 field_key，直接查找
+                    if not parent_field:
+                        parent_field = field_key_to_field_map.get(str(parent_ref))
+                    
+                    # 如果找到父字段，设置 parent_field_id
+                    if parent_field:
+                        current_field.parent_field_id = parent_field.id
+                        parent_relation_count += 1
+                        logger.debug(f"建立父子关系: {field_key} -> {parent_field.field_key}")
+                    else:
+                        # 如果找不到，尝试通过 field_key 的前缀匹配（例如：invoice_array.items -> invoice_array）
+                        # 这是一个fallback机制，用于处理嵌套字段
+                        parent_key_candidates = []
+                        if '.' in field_key:
+                            # 如果 field_key 包含点号，尝试提取父级
+                            parts = field_key.split('.')
+                            for i in range(len(parts) - 1):
+                                parent_key_candidates.append('.'.join(parts[:i+1]))
+                        else:
+                            # 检查是否有明显的父字段（例如：items 的子字段应该在 items 数组下）
+                            # 这里可以根据业务逻辑添加更多规则
+                            pass
+                        
+                        # 尝试通过候选父字段key查找
+                        for candidate_key in parent_key_candidates:
+                            candidate_field = field_key_to_field_map.get(candidate_key)
+                            if candidate_field:
+                                current_field.parent_field_id = candidate_field.id
+                                parent_relation_count += 1
+                                logger.debug(f"通过前缀匹配建立父子关系: {field_key} -> {candidate_key}")
+                                break
+                except Exception as e:
+                    logger.error(f"更新字段 parent_field_id 失败，field_key: {field_data.get('field_key', 'unknown')}, 错误: {str(e)}", exc_info=True)
+                    # 不抛出异常，继续处理其他字段
+            
+            logger.info(f"成功建立 {parent_relation_count} 个父子关系")
+        except Exception as e:
+            logger.error(f"保存字段失败: {str(e)}", exc_info=True)
+            session.rollback()
+            raise HTTPException(status_code=500, detail=f"保存字段失败: {str(e)}")
     
     template.update_time = datetime.now()
     session.add(template)
@@ -213,64 +308,86 @@ def get_template(
     获取模板详情
     前端依赖返回结构：包含模板基本信息和字段列表
     """
-    template = session.get(Template, template_id)
-    if not template:
-        raise HTTPException(status_code=404, detail="模板不存在")
-    
-    # 获取当前版本的字段
-    fields = []
-    if template.current_version_id:
-        fields = session.exec(
-            select(TemplateField)
-            .where(TemplateField.template_version_id == template.current_version_id)
-            .order_by(TemplateField.sort_order)
-        ).all()
-    
-    # 获取版本信息
-    version = None
-    if template.current_version_id:
-        version = session.get(TemplateVersion, template.current_version_id)
-    
-    # 构建返回数据
-    response_data = {
-        "id": str(template.id),
-        "name": template.name,
-        "template_type": template.template_type,
-        "description": template.description,
-        "status": template.status,
-        "schema_id": str(template.default_schema_id) if template.default_schema_id else None,
-        "default_schema_id": str(template.default_schema_id) if template.default_schema_id else None,
-        "sample_file_path": template.sample_file_path,
-        "sample_file_type": template.sample_file_type,
-        "prompt": getattr(template, 'prompt', None),  # 获取prompt字段
-        "schema": getattr(template, 'schema', None),  # 获取schema字段
-        "version": {
-            "id": str(version.id),
-            "version": version.version
-        } if version else None,
-        "fields": [
-            {
-                "id": str(f.id),
-                "field_key": f.field_key,
-                "field_name": f.field_name,
-                "data_type": f.data_type,
-                "is_required": bool(f.is_required),
-                "description": f.description,
-                "example": f.example,
-                "validation": f.validation,
-                "normalize": f.normalize,
-                "prompt_hint": f.prompt_hint,
-                "confidence_threshold": f.confidence_threshold,
-                "parent_field_id": str(f.parent_field_id) if f.parent_field_id else None,
-                "sort_order": f.sort_order,
+    try:
+        template = session.get(Template, template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="模板不存在")
+        
+        # 获取当前版本的字段
+        fields = []
+        if template.current_version_id:
+            try:
+                fields = session.exec(
+                    select(TemplateField)
+                    .where(TemplateField.template_version_id == template.current_version_id)
+                    .order_by(TemplateField.sort_order)
+                ).all()
+                logger.info(f"获取模板 {template_id} 的字段，数量: {len(fields)}")
+            except Exception as e:
+                logger.error(f"获取字段失败: {str(e)}", exc_info=True)
+                fields = []  # 如果获取字段失败，返回空列表
+        
+        # 获取版本信息
+        version = None
+        if template.current_version_id:
+            try:
+                version = session.get(TemplateVersion, template.current_version_id)
+            except Exception as e:
+                logger.error(f"获取版本信息失败: {str(e)}", exc_info=True)
+                version = None
+        
+        # 构建返回数据
+        try:
+            response_data = {
+                "id": str(template.id),
+                "name": template.name,
+                "template_type": template.template_type,
+                "description": template.description,
+                "status": template.status,
+                "schema_id": str(template.default_schema_id) if template.default_schema_id else None,
+                "default_schema_id": str(template.default_schema_id) if template.default_schema_id else None,
+                "sample_file_path": template.sample_file_path,
+                "sample_file_type": template.sample_file_type,
+                "prompt": getattr(template, 'prompt', None),  # 获取prompt字段
+                "schema": getattr(template, 'schema', None),  # 获取schema字段
+                "version": {
+                    "id": str(version.id),
+                    "version": version.version,
+                    "status": getattr(version, 'status', None),
+                } if version else None,
+                "fields": [
+                    {
+                        "id": str(f.id),
+                        "field_key": f.field_key or "",
+                        "field_name": f.field_name or "",  # 确保返回 field_name
+                        "data_name": f.field_key or "",  # data_name 使用 field_key（因为模型中没有 data_name 字段）
+                        "data_type": f.data_type or "string",
+                        "is_required": bool(f.is_required) if f.is_required is not None else False,
+                        "description": f.description,
+                        "example": f.example,
+                        "validation": f.validation,
+                        "normalize": f.normalize,
+                        "prompt_hint": f.prompt_hint,
+                        "confidence_threshold": f.confidence_threshold,
+                        "parent_field_id": str(f.parent_field_id) if f.parent_field_id else None,  # 确保返回 parent_field_id
+                        "sort_order": f.sort_order if f.sort_order is not None else 0,
+                    }
+                    for f in fields
+                ],
+                "create_time": template.create_time,
+                "update_time": template.update_time,
             }
-            for f in fields
-        ],
-        "create_time": template.create_time,
-        "update_time": template.update_time,
-    }
-    
-    return response_data
+            
+            logger.info(f"成功获取模板 {template_id}，字段数量: {len(response_data['fields'])}")
+            return response_data
+        except Exception as e:
+            logger.error(f"构建返回数据失败: {str(e)}", exc_info=True)
+            raise HTTPException(status_code=500, detail=f"构建返回数据失败: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"获取模板失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"获取模板失败: {str(e)}")
 
 
 @router.post("/{template_id}/upload-sample")
@@ -537,6 +654,249 @@ async def extract_fields_and_generate_prompt(
     except Exception as e:
         logger.error(f"字段抽取失败: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"字段抽取失败: {str(e)}")
+
+
+@router.post("/{template_id}/versions/{version_id}/publish", response_model=Message)
+def publish_version(
+    *,
+    session: SessionDep,
+    template_id: UUID,
+    version_id: UUID,
+    current_user: CurrentUser,
+) -> Any:
+    """
+    发布模板版本
+    """
+    try:
+        # 验证模板是否存在
+        template = session.get(Template, template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="模板不存在")
+        
+        # 验证版本是否存在
+        version = session.get(TemplateVersion, version_id)
+        if not version:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        
+        # 验证版本是否属于该模板
+        if version.template_id != template_id:
+            raise HTTPException(status_code=400, detail="版本不属于该模板")
+        
+        # 验证版本状态
+        if version.status == "published":
+            raise HTTPException(status_code=400, detail="版本已发布，无需重复发布")
+        
+        # 更新版本状态为已发布
+        version.status = "published"
+        version.published_at = datetime.now()
+        
+        # 保存Schema快照（如果模板有schema）
+        if template.schema:
+            version.schema_snapshot = template.schema
+        
+        # 更新模板的当前版本ID（如果当前版本不是已发布状态，则更新为最新发布的版本）
+        if not template.current_version_id or template.current_version_id != version_id:
+            # 检查是否有其他已发布的版本
+            existing_published = session.exec(
+                select(TemplateVersion)
+                .where(TemplateVersion.template_id == template_id)
+                .where(TemplateVersion.status == "published")
+                .where(TemplateVersion.id != version_id)
+            ).first()
+            
+            # 如果没有其他已发布的版本，或者当前版本就是最新版本，则更新当前版本ID
+            if not existing_published:
+                template.current_version_id = version_id
+        
+        session.add(version)
+        session.add(template)
+        session.commit()
+        
+        logger.info(f"模板 {template_id} 的版本 {version_id} 已发布")
+        return Message(message="版本发布成功")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"发布版本失败: {str(e)}", exc_info=True)
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"发布版本失败: {str(e)}")
+
+
+@router.post("/{template_id}/versions/{version_id}/create-draft", response_model=Message)
+def create_draft_version(
+    *,
+    session: SessionDep,
+    template_id: UUID,
+    version_id: UUID,
+    current_user: CurrentUser,
+) -> Any:
+    """
+    基于已发布版本创建新的草稿版本
+    """
+    try:
+        # 验证模板是否存在
+        template = session.get(Template, template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="模板不存在")
+        
+        # 验证版本是否存在
+        source_version = session.get(TemplateVersion, version_id)
+        if not source_version:
+            raise HTTPException(status_code=404, detail="源版本不存在")
+        
+        # 验证版本是否属于该模板
+        if source_version.template_id != template_id:
+            raise HTTPException(status_code=400, detail="版本不属于该模板")
+        
+        # 生成新版本号（简单递增）
+        version_parts = source_version.version.split('.')
+        if len(version_parts) >= 3:
+            major, minor, patch = int(version_parts[0]), int(version_parts[1]), int(version_parts[2])
+            new_version = f"{major}.{minor}.{patch + 1}"
+        else:
+            new_version = f"{source_version.version}.1"
+        
+        # 创建新版本
+        new_version_obj = TemplateVersion(
+            template_id=template_id,
+            version=new_version,
+            status="draft",
+            creator_id=current_user.id,
+            schema_snapshot=source_version.schema_snapshot  # 复制Schema快照
+        )
+        session.add(new_version_obj)
+        session.flush()
+        
+        # 复制字段
+        source_fields = session.exec(
+            select(TemplateField).where(TemplateField.template_version_id == version_id)
+        ).all()
+        
+        field_id_map = {}  # 用于建立parent_field_id关系
+        for source_field in source_fields:
+            new_field = TemplateField(
+                template_id=template_id,
+                template_version_id=new_version_obj.id,
+                field_key=source_field.field_key,
+                field_code=source_field.field_code,
+                field_name=source_field.field_name,
+                data_type=source_field.data_type,
+                field_type=source_field.field_type,
+                is_required=source_field.is_required,
+                required=source_field.required,
+                default_value=source_field.default_value,
+                description=source_field.description,
+                example=source_field.example,
+                validation=source_field.validation,
+                validation_rules=source_field.validation_rules,
+                normalize=source_field.normalize,
+                prompt_hint=source_field.prompt_hint,
+                confidence_threshold=source_field.confidence_threshold,
+                canonical_field=source_field.canonical_field,
+                parent_field_id=None,  # 稍后设置
+                deprecated=source_field.deprecated,
+                deprecated_at=source_field.deprecated_at,
+                position=source_field.position,
+                display_order=source_field.display_order,
+                sort_order=source_field.sort_order,
+                remark=source_field.remark,
+            )
+            session.add(new_field)
+            session.flush()
+            field_id_map[source_field.id] = new_field
+        
+        # 建立parent_field_id关系
+        for source_field in source_fields:
+            if source_field.parent_field_id:
+                new_field = field_id_map.get(source_field.id)
+                parent_field = field_id_map.get(source_field.parent_field_id)
+                if new_field and parent_field:
+                    new_field.parent_field_id = parent_field.id
+        
+        # 更新模板的当前版本ID
+        template.current_version_id = new_version_obj.id
+        
+        session.add(template)
+        session.commit()
+        
+        logger.info(f"基于版本 {version_id} 创建了新草稿版本 {new_version_obj.id}")
+        return Message(message=f"已创建新版本 {new_version}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建草稿版本失败: {str(e)}", exc_info=True)
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"创建草稿版本失败: {str(e)}")
+
+
+@router.post("/{template_id}/versions/{version_id}/deprecate", response_model=Message)
+def deprecate_version(
+    *,
+    session: SessionDep,
+    template_id: UUID,
+    version_id: UUID,
+    current_user: CurrentUser,
+) -> Any:
+    """
+    废弃模板版本
+    """
+    try:
+        # 验证模板是否存在
+        template = session.get(Template, template_id)
+        if not template:
+            raise HTTPException(status_code=404, detail="模板不存在")
+        
+        # 验证版本是否存在
+        version = session.get(TemplateVersion, version_id)
+        if not version:
+            raise HTTPException(status_code=404, detail="版本不存在")
+        
+        # 验证版本是否属于该模板
+        if version.template_id != template_id:
+            raise HTTPException(status_code=400, detail="版本不属于该模板")
+        
+        # 更新版本状态为已废弃
+        version.status = "deprecated"
+        version.deprecated_at = datetime.now()
+        
+        # 如果当前版本是被废弃的版本，需要更新模板的当前版本ID
+        if template.current_version_id == version_id:
+            # 查找最新发布的版本
+            latest_published = session.exec(
+                select(TemplateVersion)
+                .where(TemplateVersion.template_id == template_id)
+                .where(TemplateVersion.status == "published")
+                .order_by(TemplateVersion.published_at.desc())
+            ).first()
+            
+            if latest_published:
+                template.current_version_id = latest_published.id
+            else:
+                # 如果没有已发布的版本，查找最新的草稿版本
+                latest_draft = session.exec(
+                    select(TemplateVersion)
+                    .where(TemplateVersion.template_id == template_id)
+                    .where(TemplateVersion.status == "draft")
+                    .order_by(TemplateVersion.created_at.desc())
+                ).first()
+                
+                if latest_draft:
+                    template.current_version_id = latest_draft.id
+                else:
+                    template.current_version_id = None
+        
+        session.add(version)
+        session.add(template)
+        session.commit()
+        
+        logger.info(f"模板 {template_id} 的版本 {version_id} 已废弃")
+        return Message(message="版本已废弃")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"废弃版本失败: {str(e)}", exc_info=True)
+        session.rollback()
+        raise HTTPException(status_code=500, detail=f"废弃版本失败: {str(e)}")
 
 
 @router.post("/{template_id}/generate-prompt")

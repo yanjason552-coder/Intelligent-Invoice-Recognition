@@ -165,14 +165,26 @@ def _safe_query_recognition_tasks(session: SessionDep, where_clause: str = "", p
         return []
 
 
+# 辅助函数：获取用户的公司ID列表
+def get_user_company_ids(session: SessionDep, user_id: UUID) -> list[UUID]:
+    """
+    获取用户关联的所有公司ID列表
+    """
+    from app.models import UserCompany
+    user_companies = session.exec(
+        select(UserCompany).where(UserCompany.user_id == user_id)
+    ).all()
+    return [uc.company_id for uc in user_companies]
+
+
 # 辅助函数：检查用户是否有权限访问发票
-def check_invoice_permission(invoice: Invoice, current_user: CurrentUser) -> bool:
+def check_invoice_permission(invoice: Invoice, current_user: CurrentUser, session: SessionDep) -> bool:
     """
     检查用户是否有权限访问发票
     规则：
     1. 超级用户可以访问所有发票
-    2. 普通用户只能访问自己公司的发票（user.company_id = invoice.company_id）
-    3. 如果用户没有维护所属公司（company_id为null），则无权访问任何发票
+    2. 普通用户只能访问自己关联公司的发票（invoice.company_id 在用户的公司列表中）
+    3. 如果用户没有关联任何公司，则无权访问任何发票
     
     Returns:
         bool: True表示有权限，False表示无权限
@@ -181,33 +193,41 @@ def check_invoice_permission(invoice: Invoice, current_user: CurrentUser) -> boo
     if current_user.is_superuser:
         return True
     
-    # 如果用户没有维护所属公司，则无权访问任何发票
-    if not current_user.company_id:
+    # 如果发票没有公司ID，允许访问（向后兼容）
+    if not invoice.company_id:
+        return True
+    
+    # 获取用户关联的公司ID列表
+    user_company_ids = get_user_company_ids(session, current_user.id)
+    
+    # 如果用户没有关联任何公司，则无权访问
+    if not user_company_ids:
         return False
     
-    # 用户只能访问自己公司的发票
-    return invoice.company_id == current_user.company_id
+    # 检查发票的公司ID是否在用户的公司列表中
+    return invoice.company_id in user_company_ids
 
 
 # 辅助函数：添加公司过滤条件
-def add_company_filter(statement, current_user, conditions=None):
+def add_company_filter(statement, current_user: CurrentUser, session: SessionDep, conditions=None):
     """
-    根据用户的公司ID过滤发票查询
+    根据用户的公司ID列表过滤发票查询
     规则：
     1. 超级用户可以查看所有发票
-    2. 普通用户只能查看自己公司的发票（user.company_id = invoice.company_id）
-    3. 如果用户没有维护所属公司（company_id为null），则不展示任何发票
+    2. 普通用户只能查看自己关联公司的发票（invoice.company_id 在用户的公司列表中）
+    3. 如果用户没有关联任何公司，则不展示任何发票
     """
     if conditions is None:
         conditions = []
     
     # 如果不是超级用户，添加公司过滤条件
     if not current_user.is_superuser:
-        if current_user.company_id:
-            # 用户有公司ID，只能查看自己公司的发票
-            conditions.append(Invoice.company_id == current_user.company_id)
+        user_company_ids = get_user_company_ids(session, current_user.id)
+        if user_company_ids:
+            # 用户有关联公司，只能查看这些公司的发票
+            conditions.append(Invoice.company_id.in_(user_company_ids))
         else:
-            # 如果用户没有关联公司，返回空结果（使用一个永远为False的条件）
+            # 如果用户没有关联任何公司，返回空结果（使用一个永远为False的条件）
             conditions.append(Invoice.id.is_(None))
     
     if conditions:
@@ -684,7 +704,7 @@ def create_recognition_task(
             raise HTTPException(status_code=404, detail="票据不存在")
         
         # 检查权限：使用统一的权限检查函数
-        if not check_invoice_permission(invoice, current_user):
+        if not check_invoice_permission(invoice, current_user, session):
             raise HTTPException(status_code=403, detail="无权访问此票据")
         
         # 检查文件状态：只要文件状态不是成功状态（processed），都可以再次识别
@@ -909,7 +929,7 @@ def start_recognition(
             raise HTTPException(status_code=404, detail="票据不存在")
         
         # 检查权限：使用统一的权限检查函数
-        if not check_invoice_permission(invoice, current_user):
+        if not check_invoice_permission(invoice, current_user, session):
             raise HTTPException(status_code=403, detail="无权访问此票据")
         
         if task.status != "pending":
@@ -1133,7 +1153,7 @@ async def batch_create_recognition_tasks(
                     raise HTTPException(status_code=404, detail=f"文件ID {file_id} 对应的票据不存在")
                 
                 # 检查权限：使用统一的权限检查函数
-                if not check_invoice_permission(invoice, current_user):
+                if not check_invoice_permission(invoice, current_user, session):
                     logger.warning(f"  用户无权访问票据: invoice_id={invoice.id}, user.company_id={current_user.company_id}, invoice.company_id={invoice.company_id}")
                     raise HTTPException(status_code=403, detail=f"无权访问文件ID {file_id} 对应的票据")
                 
@@ -1523,7 +1543,7 @@ def query_invoices(
             conditions.append(Invoice.template_name == template_name)
         
         # 添加公司过滤条件（超级用户可以查看所有，普通用户只能查看自己公司的）
-        statement, conditions = add_company_filter(statement, current_user, conditions)
+        statement, conditions = add_company_filter(statement, current_user, session, conditions)
         logger.debug(f"应用了 {len(conditions)} 个查询条件（AND关系）")
         
         # 总数
@@ -1728,15 +1748,8 @@ def get_invoice_files_list(
         if uploader_id:
             conditions.append(InvoiceFile.uploader_id == uploader_id)
         
-        # 添加公司过滤条件（超级用户可以查看所有，普通用户只能查看自己公司的）
-        # 规则：user.company_id = invoice.company_id，如果用户没有company_id则不展示任何发票
-        if not current_user.is_superuser:
-            if current_user.company_id:
-                # 用户有公司ID，只能查看自己公司的发票
-                conditions.append(Invoice.company_id == current_user.company_id)
-            else:
-                # 如果用户没有关联公司，返回空结果（使用一个永远为False的条件）
-                conditions.append(Invoice.id.is_(None))
+        # 添加公司过滤条件（使用统一的函数）
+        statement, conditions = add_company_filter(statement, current_user, session, conditions)
         
         if conditions:
             statement = statement.where(and_(*conditions))
@@ -2040,7 +2053,7 @@ def get_invoice(
         raise HTTPException(status_code=404, detail="票据不存在")
     
     # 检查权限：使用统一的权限检查函数
-    if not check_invoice_permission(invoice, current_user):
+    if not check_invoice_permission(invoice, current_user, session):
         raise HTTPException(status_code=403, detail="无权访问此票据")
     
     # 获取公司代码
@@ -2751,7 +2764,7 @@ def get_invoice_file(
         raise HTTPException(status_code=404, detail="票据不存在")
     
     # 检查权限：使用统一的权限检查函数
-    if not check_invoice_permission(invoice, current_user):
+    if not check_invoice_permission(invoice, current_user, session):
         raise HTTPException(status_code=403, detail="无权访问此票据")
     
     invoice_file = session.get(InvoiceFile, invoice.file_id)
@@ -2785,7 +2798,7 @@ def download_invoice_file(
         raise HTTPException(status_code=404, detail="票据不存在")
     
     # 检查权限：使用统一的权限检查函数
-    if not check_invoice_permission(invoice, current_user):
+    if not check_invoice_permission(invoice, current_user, session):
         raise HTTPException(status_code=403, detail="无权访问此票据")
     
     invoice_file = session.get(InvoiceFile, invoice.file_id)
@@ -2819,7 +2832,7 @@ def get_invoice_items(
         raise HTTPException(status_code=404, detail="票据不存在")
     
     # 检查权限：使用统一的权限检查函数
-    if not check_invoice_permission(invoice, current_user):
+    if not check_invoice_permission(invoice, current_user, session):
         raise HTTPException(status_code=403, detail="无权访问此票据")
     
     # 查询该票据的所有行项目
@@ -2864,7 +2877,7 @@ def update_invoice_items(
         raise HTTPException(status_code=404, detail="票据不存在")
     
     # 检查权限：使用统一的权限检查函数
-    if not check_invoice_permission(invoice, current_user):
+    if not check_invoice_permission(invoice, current_user, session):
         raise HTTPException(status_code=403, detail="无权访问此票据")
     
     # 获取当前所有行项目
@@ -2916,7 +2929,7 @@ def update_invoice(
         raise HTTPException(status_code=404, detail="票据不存在")
     
     # 检查权限：使用统一的权限检查函数
-    if not check_invoice_permission(invoice, current_user):
+    if not check_invoice_permission(invoice, current_user, session):
         raise HTTPException(status_code=403, detail="无权访问此票据")
     
     # 更新字段
@@ -2974,7 +2987,7 @@ def get_pending_reviews(
         if template_name:
             conditions.append(Invoice.template_name == template_name)
         
-        statement, conditions = add_company_filter(statement, current_user, conditions)
+        statement, conditions = add_company_filter(statement, current_user, session, conditions)
         
         # 总数
         count_statement = select(func.count()).select_from(Invoice).where(and_(*conditions))
@@ -2991,9 +3004,44 @@ def get_pending_reviews(
             companies = session.exec(select(Company).where(Company.id.in_(list(company_ids)))).all()
             companies_dict = {c.id: c.code for c in companies}
         
-        return {
-            "data": [
-                InvoiceResponse(
+        # 批量获取识别任务信息（用于获取template_name和model_name）
+        invoice_ids = [inv.id for inv in invoices]
+        tasks_dict = {}
+        if invoice_ids:
+            tasks = session.exec(
+                select(RecognitionTask).where(RecognitionTask.invoice_id.in_(invoice_ids))
+            ).all()
+            for task in tasks:
+                if task.invoice_id not in tasks_dict:
+                    tasks_dict[task.invoice_id] = task
+        
+        # 批量获取模板信息
+        template_ids = {task.template_id for task in tasks_dict.values() if task.template_id}
+        templates_dict = {}
+        if template_ids:
+            templates = session.exec(select(Template).where(Template.id.in_(list(template_ids)))).all()
+            templates_dict = {t.id: t.name for t in templates}
+        
+        # 构建响应数据
+        result_data = []
+        for inv in invoices:
+            task = tasks_dict.get(inv.id)
+            template_name = None
+            template_version = None
+            model_name = None
+            
+            if task:
+                # 从任务中获取模板名称
+                if task.template_id and task.template_id in templates_dict:
+                    template_name = templates_dict[task.template_id]
+                
+                # 从任务的params中获取model_name和template_version
+                if task.params:
+                    model_name = task.params.get("model_config_name") or task.params.get("model_name")
+                    template_version = task.params.get("template_version")
+            
+            result_data.append({
+                **InvoiceResponse(
                     id=inv.id,
                     invoice_no=inv.invoice_no,
                     invoice_type=inv.invoice_type,
@@ -3011,18 +3059,25 @@ def get_pending_reviews(
                     review_status=inv.review_status,
                     company_id=inv.company_id,
                     company_code=companies_dict.get(inv.company_id) if inv.company_id else None,
-                    template_name=inv.template_name,  # 添加模板名称
-                    template_version=inv.template_version,  # 添加模板版本
-                    model_name=inv.model_name,  # 添加模型名称
                     create_time=inv.create_time
-                ).model_dump()
-                for inv in invoices
-            ],
+                ).model_dump(),
+                "template_name": template_name,
+                "template_version": template_version,
+                "model_name": model_name
+            })
+        
+        return {
+            "data": result_data,
             "count": total,
             "skip": skip,
             "limit": limit
         }
     except Exception as e:
+        import logging
+        import traceback
+        logger = logging.getLogger(__name__)
+        logger.error(f"获取待审核票据失败: {str(e)}", exc_info=True)
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
 
@@ -3047,7 +3102,7 @@ def approve_invoice(
             raise HTTPException(status_code=404, detail="票据不存在")
         
         # 检查权限：使用统一的权限检查函数
-        if not check_invoice_permission(invoice, current_user):
+        if not check_invoice_permission(invoice, current_user, session):
             raise HTTPException(status_code=403, detail="无权访问此票据")
         
         if invoice.review_status != "pending":
@@ -3101,7 +3156,7 @@ def reject_invoice(
             raise HTTPException(status_code=404, detail="票据不存在")
         
         # 检查权限：使用统一的权限检查函数
-        if not check_invoice_permission(invoice, current_user):
+        if not check_invoice_permission(invoice, current_user, session):
             raise HTTPException(status_code=403, detail="无权访问此票据")
         
         if invoice.review_status != "pending":
@@ -3314,7 +3369,7 @@ def get_recognition_fields(
             raise HTTPException(status_code=404, detail="票据不存在")
         
         # 检查权限：使用统一的权限检查函数
-        if not check_invoice_permission(invoice, current_user):
+        if not check_invoice_permission(invoice, current_user, session):
             raise HTTPException(status_code=403, detail="无权访问此票据")
         
         statement = select(RecognitionField).where(RecognitionField.result_id == result_id)
@@ -3358,7 +3413,7 @@ def get_invoice_schema_validation_status(
             raise HTTPException(status_code=404, detail="发票不存在")
         
         # 检查权限：使用统一的权限检查函数
-        if not check_invoice_permission(invoice, current_user):
+        if not check_invoice_permission(invoice, current_user, session):
             raise HTTPException(status_code=403, detail="无权访问此发票")
 
         # 获取最新的识别结果（使用安全查询，避免字段不存在的问题）

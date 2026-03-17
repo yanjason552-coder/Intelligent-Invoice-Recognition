@@ -15,6 +15,7 @@ from app.models import (
     CompanyPublic,
     CompaniesPublic,
     User,
+    UserCompany,
     Message,
 )
 
@@ -40,11 +41,11 @@ def read_companies(
     statement = select(Company).offset(skip).limit(limit)
     companies = session.exec(statement).all()
 
-    # 计算每个公司的用户数量
+    # 计算每个公司的用户数量（使用多对多关系）
     result = []
     for company in companies:
         user_count = session.exec(
-            select(func.count()).select_from(User).where(User.company_id == company.id)
+            select(func.count()).select_from(UserCompany).where(UserCompany.company_id == company.id)
         ).one()
         company_public = CompanyPublic(
             **company.model_dump(),
@@ -83,9 +84,9 @@ def create_company(
     session.commit()
     session.refresh(company)
     
-    # 计算用户数量
+    # 计算用户数量（使用多对多关系）
     user_count = session.exec(
-        select(func.count()).select_from(User).where(User.company_id == company.id)
+        select(func.count()).select_from(UserCompany).where(UserCompany.company_id == company.id)
     ).one()
     
     return CompanyPublic(**company.model_dump(), user_count=user_count)
@@ -107,9 +108,9 @@ def read_company(
     if not company:
         raise HTTPException(status_code=404, detail="公司不存在")
     
-    # 计算用户数量
+    # 计算用户数量（使用多对多关系）
     user_count = session.exec(
-        select(func.count()).select_from(User).where(User.company_id == company_id)
+        select(func.count()).select_from(UserCompany).where(UserCompany.company_id == company_id)
     ).one()
     
     return CompanyPublic(**company.model_dump(), user_count=user_count)
@@ -150,9 +151,9 @@ def update_company(
     session.commit()
     session.refresh(company)
     
-    # 计算用户数量
+    # 计算用户数量（使用多对多关系）
     user_count = session.exec(
-        select(func.count()).select_from(User).where(User.company_id == company_id)
+        select(func.count()).select_from(UserCompany).where(UserCompany.company_id == company_id)
     ).one()
     
     return CompanyPublic(**company.model_dump(), user_count=user_count)
@@ -175,9 +176,9 @@ def delete_company(
     if not company:
         raise HTTPException(status_code=404, detail="公司不存在")
 
-    # 检查是否有用户关联
+    # 检查是否有用户关联（使用多对多关系）
     user_count = session.exec(
-        select(func.count()).select_from(User).where(User.company_id == company_id)
+        select(func.count()).select_from(UserCompany).where(UserCompany.company_id == company_id)
     ).one()
     
     if user_count > 0:

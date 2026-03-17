@@ -555,6 +555,13 @@ class InvoiceResponse(SQLModel):
     create_time: datetime
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+    # 识别结果相关字段
+    normalized_fields: Optional[dict] = None
+    template_version_id: Optional[UUID] = None
+    field_defs_snapshot: Optional[dict] = None
+    template_version: Optional[str] = None
+    template_name: Optional[str] = None
+    model_name: Optional[str] = None
 
 
 # 识别任务参数模型

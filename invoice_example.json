@@ -1,0 +1,34 @@
+{
+    "invoice_title": "示例发票抬头",
+    "invoice_no": "INV-2024-001",
+    "docdate": "2024-01-15",
+    "buyer_info": {
+        "name": "购买方名称",
+        "tax_id": "91110000MA01234567"
+    },
+    "seller_info": {
+        "name": "销售方名称",
+        "tax_id": "91110000MA01234568"
+    },
+    "items": [
+        {
+            "name": "商品名称",
+            "model": "规格型号",
+            "unit": "件",
+            "quantity": 10,
+            "unit_price": 100.00,
+            "amount": 1000.00,
+            "tax_rate": "13%",
+            "tax_amount": 130.00
+        }
+    ],
+    "total_amount_exclusive_tax": 1000.00,
+    "total_tax_amount": 130.00,
+    "total_amount_inclusive_tax": {
+        "in_words": "壹仟壹佰叁拾元整",
+        "in_figures": 1130.00
+    },
+    "remarks": "备注信息",
+    "issuer": "开票人姓名"
+}
+

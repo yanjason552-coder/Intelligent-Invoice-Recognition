@@ -26,10 +26,47 @@ from app.models import (
     UserRole,
     Role,
     RolePublic,
+    UserCompany,
+    Company,
 )
 from app.utils import generate_new_account_email, send_email
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _enrich_user_with_companies(session: SessionDep, user: User) -> dict:
+    """为用户添加公司信息"""
+    user_dict = user.model_dump()
+    
+    # 查询用户的公司关联
+    user_companies = session.exec(
+        select(UserCompany).where(UserCompany.user_id == user.id)
+    ).all()
+    
+    company_ids = [uc.company_id for uc in user_companies]
+    primary_company_id = next((uc.company_id for uc in user_companies if uc.is_primary), None)
+    
+    # 查询公司详细信息
+    companies_info = []
+    if company_ids:
+        companies = session.exec(
+            select(Company).where(Company.id.in_(company_ids))
+        ).all()
+        companies_info = [
+            {
+                "id": str(c.id),
+                "code": c.code,
+                "name": c.name,
+                "is_primary": c.id == primary_company_id
+            }
+            for c in companies
+        ]
+    
+    user_dict["company_ids"] = [str(cid) for cid in company_ids] if company_ids else None
+    user_dict["primary_company_id"] = str(primary_company_id) if primary_company_id else None
+    user_dict["companies"] = companies_info if companies_info else None
+    
+    return user_dict
 
 
 @router.get(
@@ -47,8 +84,11 @@ def read_users(session: SessionDep, skip: int = 0, limit: int = 100) -> Any:
 
     statement = select(User).offset(skip).limit(limit)
     users = session.exec(statement).all()
+    
+    # 为每个用户添加公司信息
+    enriched_users = [_enrich_user_with_companies(session, user) for user in users]
 
-    return UsersPublic(data=users, count=count)
+    return UsersPublic(data=enriched_users, count=count)
 
 
 @router.post(
@@ -75,7 +115,8 @@ def create_user(*, session: SessionDep, user_in: UserCreate) -> Any:
             subject=email_data.subject,
             html_content=email_data.html_content,
         )
-    return user
+    # 返回包含公司信息的用户数据
+    return _enrich_user_with_companies(session, user)
 
 
 @router.patch("/me", response_model=UserPublic)
@@ -131,7 +172,8 @@ def read_user_me(
     try:
         # 刷新用户数据，确保获取最新信息
         session.refresh(current_user)
-        return current_user
+        # 返回包含公司信息的用户数据
+        return _enrich_user_with_companies(session, current_user)
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
@@ -250,7 +292,8 @@ def update_user(
             )
 
     db_user = crud.update_user(session=session, db_user=db_user, user_in=user_in)
-    return db_user
+    # 返回包含公司信息的用户数据
+    return _enrich_user_with_companies(session, db_user)
 
 
 @router.delete("/{user_id}", dependencies=[Depends(get_current_active_superuser)])

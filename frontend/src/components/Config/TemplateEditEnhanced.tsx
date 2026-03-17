@@ -8,13 +8,14 @@ import {
   DialogCloseTrigger,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { FiSave, FiX, FiPlus, FiTrash2, FiEdit2, FiLink, FiCheckCircle, FiChevronDown, FiChevronUp, FiUpload, FiDownload, FiMinus, FiRefreshCw, FiCopy, FiXCircle, FiAlertCircle } from "react-icons/fi"
+import { FiSave, FiX, FiPlus, FiTrash2, FiEdit2, FiLink, FiCheckCircle, FiChevronDown, FiChevronUp, FiUpload, FiDownload, FiMinus, FiRefreshCw, FiCopy, FiXCircle, FiAlertCircle, FiFileText } from "react-icons/fi"
 import { useState, useEffect, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Field } from "@/components/ui/field"
 import useCustomToast from '@/hooks/useCustomToast'
 import axios from 'axios'
 import * as XLSX from 'xlsx'
+import { generateFieldsFromInvoiceSchema, schemaToFields } from '@/utils/schemaToFields'
 
 interface SchemaOption {
   id: string
@@ -95,33 +96,116 @@ interface TemplateDetail {
 // 从字段列表生成简单的JSON结构（根据数据名称和数据类型）
 function generateSimpleJsonFromFields(fields: TemplateField[]): any {
   const result: any = {}
+  
+  // 建立字段ID映射（使用字符串比较，确保类型一致）
+  const fieldMap = new Map<string, TemplateField>()
+  fields.forEach(field => {
+    if (field.id) {
+      fieldMap.set(String(field.id), field)
+    }
+  })
 
-  // 按字段层级分组
-  const topLevelFields = fields.filter(field => !field.parent_field_id)
-  const fieldMap = new Map(fields.map(field => [field.id, field]))
+  // 调试：打印字段关系
+  console.log('字段关系检查:', fields.map(f => ({
+    id: f.id,
+    field_key: f.field_key,
+    parent_field_id: f.parent_field_id,
+    parent_field_id_type: typeof f.parent_field_id,
+    hasParent: !!f.parent_field_id,
+    parentExists: f.parent_field_id ? fieldMap.has(String(f.parent_field_id)) : false,
+    data_type: f.data_type
+  })))
+  
+  // 调试：打印所有字段ID
+  console.log('所有字段ID:', fields.map(f => f.id).filter(Boolean))
 
-  // 处理顶级字段
-  topLevelFields.forEach(field => {
+  // 递归处理字段，生成嵌套结构
+  const processFieldRecursive = (field: TemplateField, processedIds: Set<string> = new Set()): any => {
+    // 防止循环引用
+    const fieldIdStr = field.id ? String(field.id) : ''
+    if (fieldIdStr && processedIds.has(fieldIdStr)) {
+      console.warn(`检测到循环引用: ${field.field_key}`)
+      return getFieldTypeString(field)
+    }
+    if (fieldIdStr) {
+      processedIds.add(fieldIdStr)
+    }
+
     const fieldKey = field.data_name || field.field_key
 
     if (field.data_type === 'array') {
-      // 数组类型的字段，查找其子字段
-      const childFields = fields.filter(f => f.parent_field_id === field.id)
+      // 数组类型的字段，查找其直接子字段（parent_field_id === field.id）
+      const childFields = fields.filter(f => {
+        // 确保是直接子字段，使用字符串比较
+        if (!f.parent_field_id || !field.id) return false
+        const match = String(f.parent_field_id) === String(field.id)
+        if (match) {
+          console.log(`找到子字段: ${f.field_key} -> ${field.field_key}`)
+        }
+        return match
+      })
+      
+      console.log(`数组字段 ${field.field_key} 的子字段数量:`, childFields.length, childFields.map(f => f.field_key))
+      
       if (childFields.length > 0) {
         // 创建数组项的对象结构
         const arrayItem: any = {}
         childFields.forEach(childField => {
           const childKey = childField.data_name || childField.field_key
-          arrayItem[childKey] = getFieldTypeString(childField)
+          // 递归处理子字段（可能是嵌套的数组或对象）
+          arrayItem[childKey] = processFieldRecursive(childField, new Set(processedIds))
         })
-        result[fieldKey] = [arrayItem]
+        return [arrayItem]
       } else {
-        result[fieldKey] = []
+        return []
       }
+    } else if (field.data_type === 'object') {
+      // 对象类型的字段，查找其直接子字段
+      const childFields = fields.filter(f => {
+        if (!f.parent_field_id || !field.id) return false
+        const match = String(f.parent_field_id) === String(field.id)
+        if (match) {
+          console.log(`找到子字段: ${f.field_key} -> ${field.field_key}`)
+        }
+        return match
+      })
+      
+      console.log(`对象字段 ${field.field_key} 的子字段数量:`, childFields.length, childFields.map(f => f.field_key))
+      
+      const obj: any = {}
+      childFields.forEach(childField => {
+        const childKey = childField.data_name || childField.field_key
+        // 递归处理子字段
+        obj[childKey] = processFieldRecursive(childField, new Set(processedIds))
+      })
+      return obj
     } else {
       // 普通字段
-      result[fieldKey] = getFieldTypeString(field)
+      return getFieldTypeString(field)
     }
+  }
+
+  // 按字段层级分组：只处理没有 parent_field_id 的顶级字段
+  const topLevelFields = fields.filter(field => {
+    // 顶级字段：没有 parent_field_id
+    if (!field.parent_field_id) {
+      return true
+    }
+    // 如果 parent_field_id 存在但对应的字段不在 fields 中，也认为是顶级字段
+    const parentIdStr = String(field.parent_field_id)
+    const parentExists = fields.some(f => f.id && String(f.id) === parentIdStr)
+    if (!parentExists) {
+      console.warn(`字段 ${field.field_key} 的父字段不存在: ${parentIdStr}`)
+    }
+    return !parentExists
+  })
+
+  console.log('顶级字段:', topLevelFields.map(f => f.field_key))
+
+  // 处理顶级字段
+  topLevelFields.forEach(field => {
+    const fieldKey = field.data_name || field.field_key
+    result[fieldKey] = processFieldRecursive(field)
   })
 
   return result
@@ -196,7 +280,7 @@ function generateSchemaFromFields(fields: TemplateField[]): any {
   return schema
 }
 
-// 生成嵌套Schema（用于数组项）
+// 生成嵌套Schema（用于数组项和对象，递归处理）
 function generateNestedSchema(parentField: TemplateField, allFields: TemplateField[], fieldMap: Map<string, TemplateField>): any {
   const nestedSchema: any = {
     "type": "object",
@@ -204,14 +288,27 @@ function generateNestedSchema(parentField: TemplateField, allFields: TemplateFie
     "required": []
   }
 
-  // 找到这个父字段的所有子字段
-  allFields.forEach(field => {
-    if (field.parent_field_id === parentField.id) {
-      nestedSchema.properties[field.field_key] = generateFieldSchema(field)
+  // 找到这个父字段的所有直接子字段
+  const directChildren = allFields.filter(field => field.parent_field_id === parentField.id)
 
-      if (field.is_required) {
-        nestedSchema.required.push(field.field_key)
+  // 处理每个子字段
+  directChildren.forEach(field => {
+    if (field.data_type === 'array') {
+      // 如果子字段是数组，递归生成嵌套Schema
+      nestedSchema.properties[field.field_key] = {
+        "type": "array",
+        "items": generateNestedSchema(field, allFields, fieldMap)
       }
+    } else if (field.data_type === 'object') {
+      // 如果子字段是对象，递归生成嵌套Schema
+      nestedSchema.properties[field.field_key] = generateNestedSchema(field, allFields, fieldMap)
+    } else {
+      // 普通字段
+      nestedSchema.properties[field.field_key] = generateFieldSchema(field)
+    }
+
+    if (field.is_required) {
+      nestedSchema.required.push(field.field_key)
     }
   })
 
@@ -566,6 +663,32 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
   
   // 排序后的字段列表（确保父字段在子字段之前）
   const sortedFields = useMemo(() => {
+    // 建立字段ID到字段的映射
+    const fieldMap = new Map<string, TemplateField>()
+    fields.forEach(f => {
+      if (f.id) {
+        fieldMap.set(String(f.id), f)
+      }
+    })
+    
+    // 计算字段的层级深度（通过 parent_field_id 递归计算）
+    const getFieldDepth = (field: TemplateField, visited: Set<string> = new Set()): number => {
+      if (!field.parent_field_id) {
+        return 0
+      }
+      const parentIdStr = String(field.parent_field_id)
+      if (visited.has(parentIdStr)) {
+        // 防止循环引用
+        return 0
+      }
+      visited.add(parentIdStr)
+      const parentField = fieldMap.get(parentIdStr)
+      if (!parentField) {
+        return 0
+      }
+      return 1 + getFieldDepth(parentField, visited)
+    }
+    
     return [...fields].sort((a, b) => {
       // 首先按 sort_order 排序
       const orderA = a.sort_order || 0
@@ -574,16 +697,16 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
         return orderA - orderB
       }
       
-      // 如果 sort_order 相同，按 field_key 的层级排序（父字段在前）
-      const keyA = a.field_key || ''
-      const keyB = b.field_key || ''
-      const levelA = keyA.split('.').length
-      const levelB = keyB.split('.').length
-      if (levelA !== levelB) {
-        return levelA - levelB
+      // 如果 sort_order 相同，按层级深度排序（父字段在前）
+      const depthA = getFieldDepth(a)
+      const depthB = getFieldDepth(b)
+      if (depthA !== depthB) {
+        return depthA - depthB
       }
       
       // 如果层级相同，按字母顺序排序
+      const keyA = a.field_key || ''
+      const keyB = b.field_key || ''
       return keyA.localeCompare(keyB)
     })
   }, [fields])
@@ -979,12 +1102,30 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
         const loadedFields = data.fields || []
         console.log('加载的字段列表:', loadedFields)
         console.log('字段数量:', loadedFields.length)
-        // 检查是否有嵌套字段
-        const nestedFields = loadedFields.filter(f => f.field_key && f.field_key.includes('.'))
-        console.log('嵌套字段数量:', nestedFields.length)
-        if (nestedFields.length > 0) {
-          console.log('嵌套字段示例:', nestedFields.slice(0, 3))
+        
+        // 检查字段的 parent_field_id 和 field_name
+        const fieldsWithParent = loadedFields.filter(f => f.parent_field_id)
+        console.log('有父字段的字段数量:', fieldsWithParent.length)
+        if (fieldsWithParent.length > 0) {
+          console.log('有父字段的字段示例:', fieldsWithParent.slice(0, 5).map(f => ({
+            field_key: f.field_key,
+            field_name: f.field_name,
+            parent_field_id: f.parent_field_id,
+            data_type: f.data_type
+          })))
         }
+        
+        // 检查字段名称是否为空
+        const fieldsWithoutName = loadedFields.filter(f => !f.field_name || f.field_name.trim() === '')
+        if (fieldsWithoutName.length > 0) {
+          console.warn('字段名称为空的字段数量:', fieldsWithoutName.length)
+          console.warn('字段名称为空的字段:', fieldsWithoutName.map(f => ({
+            field_key: f.field_key,
+            field_name: f.field_name,
+            data_name: f.data_name
+          })))
+        }
+        
         setFields(loadedFields)
         // 保存原始字段列表（用于检测新增字段）
         setOriginalFields(JSON.parse(JSON.stringify(loadedFields))) // 深拷贝
@@ -1131,6 +1272,15 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
     }
 
     try {
+      // 调试：打印字段的父子关系
+      console.log('字段列表:', fields.map(f => ({
+        id: f.id,
+        field_key: f.field_key,
+        data_name: f.data_name,
+        parent_field_id: f.parent_field_id,
+        data_type: f.data_type
+      })))
+      
       const generatedSchema = generateSimpleJsonFromFields(fields)
       const schemaString = JSON.stringify(generatedSchema, null, 2)
       setTemplateSchema(schemaString)
@@ -1183,8 +1333,9 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
         })() : undefined, // 添加 schema 字段
         // matching_rules: matchingRules // 暂时隐藏匹配规则功能
         fields: fields.map((field, index) => ({
+          id: field.id,  // 发送字段ID（用于建立parent_field_id关系）
           field_key: field.field_key,
-          field_name: field.field_name,
+          field_name: field.field_name || '',  // 确保发送 field_name
           data_name: field.data_name || field.field_key,
           data_type: field.data_type || 'string',
           is_required: field.is_required || false,
@@ -1195,7 +1346,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
           prompt_hint: field.prompt_hint,
           confidence_threshold: field.confidence_threshold,
           sort_order: field.sort_order !== undefined ? field.sort_order : index,
-          parent_field_id: field.parent_field_id
+          parent_field_id: field.parent_field_id  // 发送 parent_field_id（可能是临时ID或field_key）
         })) // 添加字段数据
       }
       console.log('保存模板，当前 fields 状态数量:', fields.length)
@@ -1532,139 +1683,295 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
     input.click()
   }
   
-  // 根据 Schema 更新字段
+  // 辅助函数：将简单对象转换为 Schema properties（递归处理嵌套结构）
+  const convertSimpleObjectToSchemaProperties = (obj: any): any => {
+    const properties: any = {}
+    
+    Object.keys(obj).forEach(key => {
+      const value = obj[key]
+      
+      if (Array.isArray(value) && value.length > 0) {
+        // 数组类型
+        const firstItem = value[0]
+        if (typeof firstItem === 'object' && firstItem !== null) {
+          // 数组项是对象，递归处理
+          properties[key] = {
+            type: "array",
+            items: {
+              type: "object",
+              properties: convertSimpleObjectToSchemaProperties(firstItem)
+            }
+          }
+        } else {
+          // 数组项是基本类型
+          const typeStr = String(firstItem).toLowerCase()
+          let itemType = "string"
+          if (typeStr.includes('number')) {
+            itemType = "number"
+          } else if (typeStr.includes('boolean')) {
+            itemType = "boolean"
+          }
+          properties[key] = {
+            type: "array",
+            items: { type: itemType }
+          }
+        }
+      } else if (typeof value === 'object' && value !== null) {
+        // 对象类型，递归处理
+        properties[key] = {
+          type: "object",
+          properties: convertSimpleObjectToSchemaProperties(value)
+        }
+      } else {
+        // 基本类型
+        const typeStr = String(value).toLowerCase()
+        let jsonType: string | string[] = "string"
+        if (typeStr.includes('number')) {
+          jsonType = "number"
+        } else if (typeStr.includes('boolean')) {
+          jsonType = "boolean"
+        } else if (typeStr.includes('null')) {
+          jsonType = ["string", "null"]
+        }
+        properties[key] = { type: jsonType }
+      }
+    })
+    
+    return properties
+  }
+
+  // 根据 Schema 更新字段（从当前输入的 Schema 更新）
   const handleUpdateFieldsFromSchema = async () => {
-    if (!templateId) {
-      showErrorToast('模板ID不存在')
+    if (!templateSchema || !templateSchema.trim()) {
+      showErrorToast('请先输入 Schema')
       return
     }
 
     try {
       setLoading(true)
-      const token = localStorage.getItem('access_token')
-      const apiBaseUrl = import.meta.env.VITE_API_URL || ''
       
-      // 根据模板名称选择正确的 Schema 文件
-      const templateName = template?.name || formData.name || ''
-      let schemaFileName = '/fixed_schema.json' // 默认使用发票模板的 Schema
-      
-      // 如果是"孔位类"模板，使用尺寸检验记录的 Schema
-      if (templateName.includes('孔位类') || templateName.includes('孔类')) {
-        schemaFileName = '/dimension_inspection_schema.json'
-      }
-      
-      // 读取对应的 Schema 文件
-      const schemaResponse = await fetch(schemaFileName)
-      if (!schemaResponse.ok) {
-        // 如果文件不存在，根据模板名称使用默认的 Schema
-        let defaultSchema: any
-        
-        if (templateName.includes('孔位类') || templateName.includes('孔类')) {
-          // 尺寸检验记录的默认 Schema
-          defaultSchema = {
-            doc_type: "dimension_inspection",
-            form_title: null,
-            drawing_no: null,
-            part_name: null,
-            part_no: null,
-            date: null,
-            inspector_name: null,
-            overall_result: "unknown",
-            remarks: null,
-            items: [
-              {
-                item_no: null,
-                inspection_item: null,
-                spec_requirement: null,
-                actual_value: null,
-                judgement: "unknown",
-                measurements: [
-                  {
-                    angle: null,
-                    point_label: null,
-                    value: null
-                  }
-                ],
-                notes: null
-              }
-            ]
-          }
-        } else {
-          // 发票模板的默认 Schema
-          defaultSchema = {
-            invoice_title: "string",
-            invoice_no: "string",
-            purchase_order: "string",
-            reference_order: "string",
-            supplier_no: "string",
-            docdate: "string",
-            buyer_info: {
-              name: "string",
-              tax_id: "string",
-              company_code: "string"
-            },
-            seller_info: {
-              name: "string",
-              tax_id: "string"
-            },
-            items: [
-              {
-                LineId: "string",
-                name: "string",
-                part_no: "string",
-                supplier_partno: "string",
-                po_no: "string",
-                unit: "string",
-                quantity: "number | null",
-                unit_price: "number | null",
-                amount: "number",
-                tax_rate: "string",
-                tax_amount: "number"
-              }
-            ],
-            total_amount_exclusive_tax: "number",
-            currency: "string",
-            total_tax_amount: "number",
-            total_amount_inclusive_tax: {
-              in_words: "string",
-              in_figures: "number"
-            },
-            remarks: "string",
-            issuer: "string"
-          }
-        }
-        
-        const url = apiBaseUrl ? `${apiBaseUrl}/api/v1/templates/${templateId}/update-fields-from-schema` : `/api/v1/templates/${templateId}/update-fields-from-schema`
-        const response = await axios.post(url, {
-          schema: defaultSchema
-        }, {
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          timeout: 30000
-        })
-        
-        if (response.data) {
-          showSuccessToast('字段已根据 Schema 更新成功')
-          // 重新加载模板数据
-          await loadTemplate()
-        }
+      // 解析当前输入的 Schema
+      let schemaData: any
+      try {
+        schemaData = JSON.parse(templateSchema)
+      } catch (parseError) {
+        showErrorToast('Schema 格式错误，请检查 JSON 格式')
         return
       }
+
+      // 将 Schema 转换为标准 JSON Schema 格式
+      let standardSchema: any
       
-      const schemaData = await schemaResponse.json()
-      const url = apiBaseUrl ? `${apiBaseUrl}/api/v1/templates/${templateId}/update-fields-from-schema` : `/api/v1/templates/${templateId}/update-fields-from-schema`
-      
-      const response = await axios.post(url, {
-        schema: schemaData
-      }, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        timeout: 30000
-      })
-      
-      if (response.data) {
-        showSuccessToast('字段已根据 Schema 更新成功')
-        // 重新加载模板数据
-        await loadTemplate()
+      // 检查是否是标准 JSON Schema 格式
+      if (schemaData.properties || schemaData.$schema) {
+        // 已经是标准 JSON Schema 格式
+        standardSchema = schemaData
+        // 如果没有 properties，尝试从顶层对象构建
+        if (!standardSchema.properties && typeof schemaData === 'object') {
+          standardSchema = {
+            type: "object",
+            properties: convertSimpleObjectToSchemaProperties(schemaData)
+          }
+        }
+      } else if (typeof schemaData === 'object' && schemaData !== null) {
+        // 检查是否是扁平化的 Schema（例如：{invoice_array: [], invoice_title: "string", ...}）
+        // 如果是扁平化的，尝试重建嵌套结构
+        const hasFlatStructure = Object.keys(schemaData).some(key => {
+          const value = schemaData[key]
+          // 检查是否有数组字段（如 invoice_array）和其他字段（如 invoice_title）
+          // 如果其他字段名看起来像是数组项的子字段，则可能是扁平化的
+          return Array.isArray(value) && value.length === 0
+        })
+        
+        if (hasFlatStructure) {
+          // 检测到扁平化的 Schema，提示用户使用标准 Schema
+          console.warn('检测到扁平化的 Schema，尝试重建嵌套结构...')
+          
+          // 尝试重建嵌套结构
+          // 查找数组字段（如 invoice_array）
+          const arrayKeys = Object.keys(schemaData).filter(key => 
+            Array.isArray(schemaData[key]) && schemaData[key].length === 0
+          )
+          
+          if (arrayKeys.length > 0 && arrayKeys.includes('invoice_array')) {
+            // 找到 invoice_array，使用标准 Schema 结构
+            console.log('检测到 invoice_array，使用标准 Schema 结构')
+            standardSchema = {
+              type: "object",
+              properties: {
+                invoice_array: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      invoice_title: { type: ["string", "null"] },
+                      invoice_number: { type: ["string", "null"] },
+                      issue_date: { type: ["string", "null"] },
+                      supplier_no: { type: ["string", "null"] },
+                      items: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            name: { type: ["string", "null"] },
+                            part_no: { type: ["string", "null"] },
+                            unit: { type: ["string", "null"] },
+                            purchase_order: { type: ["string", "null"] },
+                            quantity: { type: ["number", "null"] },
+                            unit_price: { type: ["number", "null"] },
+                            amount: { type: "number" },
+                            tax_rate: { type: ["string", "null"] },
+                            tax_amount: { type: "number" }
+                          }
+                        }
+                      },
+                      total_amount_exclusive_tax: { type: ["number", "null"] },
+                      total_tax_amount: { type: ["number", "null"] },
+                      remarks: { type: ["string", "null"] },
+                      issuer: { type: ["string", "null"] }
+                    }
+                  }
+                }
+              }
+            }
+          } else {
+            // 没有找到 invoice_array，使用原来的转换方法
+            console.log('未找到 invoice_array，使用原来的转换方法')
+            standardSchema = {
+              type: "object",
+              properties: convertSimpleObjectToSchemaProperties(schemaData)
+            }
+          }
+        } else {
+          // 简单 JSON 结构，转换为标准 Schema 格式
+          // 例如：{ invoice_array: [{ invoice_title: "string", ... }] }
+          standardSchema = {
+            type: "object",
+            properties: convertSimpleObjectToSchemaProperties(schemaData)
+          }
+        }
+      } else {
+        showErrorToast('Schema 格式不正确，必须是对象格式')
+        return
       }
+
+      // 将 Schema 转换为字段列表
+      const newFields = schemaToFields(standardSchema)
+      
+      if (newFields.length === 0) {
+        showErrorToast('从 Schema 生成的字段列表为空')
+        return
+      }
+
+      // 调试：打印从Schema生成的字段
+      console.log('从Schema生成的字段（原始）:', newFields.map(f => ({
+        id: f.id,
+        field_key: f.field_key,
+        parent_field_id: f.parent_field_id,
+        parent_field_id_type: typeof f.parent_field_id,
+        data_type: f.data_type
+      })))
+      
+      // 调试：打印标准Schema结构
+      console.log('标准Schema结构:', JSON.stringify(standardSchema, null, 2))
+
+      // 建立临时ID到新ID的映射（因为schemaToFields生成的ID是临时的）
+      const tempIdToNewIdMap = new Map<string, string>()
+      
+      // 第一遍：为新字段生成ID并建立临时ID映射
+      // 注意：需要保持字段的顺序，确保父字段在子字段之前
+      const fieldsWithTempIds = newFields.map((field, index) => {
+        // 保留原始ID作为临时ID的引用
+        const originalId = field.id
+        // 如果字段没有ID，生成一个新ID
+        const newId = originalId || `schema_field_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`
+        
+        // 建立原始ID到新ID的映射（即使originalId不存在，也要建立映射）
+        if (originalId) {
+          tempIdToNewIdMap.set(String(originalId), newId)
+        }
+        // 同时建立新ID到自身的映射（用于后续查找）
+        tempIdToNewIdMap.set(newId, newId)
+        
+        return {
+          ...field,
+          id: newId,
+          sort_order: index,
+          _originalParentId: field.parent_field_id // 临时保存原始parent_field_id
+        }
+      })
+
+      console.log('临时ID映射:', Array.from(tempIdToNewIdMap.entries()))
+      console.log('字段的原始parent_field_id:', fieldsWithTempIds.map(f => ({
+        field_key: f.field_key,
+        originalId: (f as any)._originalParentId,
+        newId: f.id,
+        data_type: f.data_type
+      })))
+
+      // 第二遍：更新parent_field_id（将临时ID转换为新ID）
+      const fieldsWithIds = fieldsWithTempIds.map(field => {
+        // 使用保存的原始parent_field_id
+        const originalParentId = (field as any)._originalParentId
+        
+        if (originalParentId) {
+          // 查找原始parent_field_id对应的新ID
+          let parentNewId = tempIdToNewIdMap.get(String(originalParentId))
+          
+          if (!parentNewId) {
+            // 如果找不到映射，尝试直接匹配（可能是已经转换过的ID）
+            const parentField = fieldsWithTempIds.find(f => String(f.id) === String(originalParentId))
+            if (parentField) {
+              parentNewId = parentField.id
+            }
+          }
+          
+          if (parentNewId) {
+            console.log(`✓ 更新parent_field_id: ${field.field_key} 的父字段从 ${originalParentId} 更新为 ${parentNewId}`)
+            const { _originalParentId, ...fieldWithoutTemp } = field as any
+            return {
+              ...fieldWithoutTemp,
+              parent_field_id: parentNewId
+            }
+          } else {
+            // 如果还是找不到，清除parent_field_id（可能是错误的引用）
+            console.warn(`✗ 找不到父字段ID: ${originalParentId}，字段: ${field.field_key}`)
+            const { _originalParentId, ...fieldWithoutTemp } = field as any
+            return {
+              ...fieldWithoutTemp,
+              parent_field_id: undefined
+            }
+          }
+        }
+        // 没有parent_field_id，直接返回
+        const { _originalParentId, ...fieldWithoutTemp } = field as any
+        return fieldWithoutTemp
+      })
+
+      // 调试：打印更新后的字段关系
+      console.log('更新后的字段关系:', fieldsWithIds.map(f => ({
+        id: f.id,
+        field_key: f.field_key,
+        parent_field_id: f.parent_field_id,
+        data_type: f.data_type,
+        hasParent: !!f.parent_field_id,
+        parentExists: f.parent_field_id ? fieldsWithIds.some(pf => String(pf.id) === String(f.parent_field_id)) : false
+      })))
+
+      // 将新字段ID添加到新字段集合中
+      const importedFieldIds = fieldsWithIds.map(f => f.id!).filter(Boolean)
+      setNewFieldIds(new Set([...newFieldIds, ...importedFieldIds]))
+
+      // 替换现有字段（而不是追加）
+      setFields(fieldsWithIds)
+      setOriginalFields([...fieldsWithIds])
+
+      // 如果字段较多，自动展开
+      if (!isFieldsExpanded && fieldsWithIds.length > 3) {
+        onFieldsToggle()
+      }
+
+      showSuccessToast(`成功从 Schema 更新 ${fieldsWithIds.length} 个字段`)
     } catch (error: any) {
       console.error('根据 Schema 更新字段失败:', error)
       let errorMessage = '根据 Schema 更新字段失败'
@@ -1745,6 +2052,116 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
     }
     
     showSuccessToast(`成功导入 ${importedFields.length} 个字段`)
+  }
+  
+  // 从 JSON Schema 导入字段（采购字段模板）
+  const handleImportFromSchema = () => {
+    try {
+      const schemaFields = generateFieldsFromInvoiceSchema()
+      
+      if (schemaFields.length === 0) {
+        showErrorToast('从 Schema 生成的字段列表为空')
+        return
+      }
+      
+      // 调试：打印从Schema生成的字段
+      console.log('从Schema导入的字段（原始）:', schemaFields.map(f => ({
+        id: f.id,
+        field_key: f.field_key,
+        parent_field_id: f.parent_field_id,
+        data_type: f.data_type
+      })))
+      
+      // 建立原始ID到新ID的映射
+      const originalIdToNewIdMap = new Map<string, string>()
+      
+      // 第一遍：为新字段生成ID并建立映射
+      const fieldsWithTempIds = schemaFields.map((field, index) => {
+        const originalId = field.id
+        const newId = originalId || `schema_field_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 9)}`
+        
+        // 建立原始ID到新ID的映射
+        if (originalId) {
+          originalIdToNewIdMap.set(String(originalId), newId)
+        }
+        // 同时建立新ID到自身的映射
+        originalIdToNewIdMap.set(newId, newId)
+        
+        return {
+          ...field,
+          id: newId,
+          sort_order: fields.length + index,
+          _originalParentId: field.parent_field_id // 临时保存原始parent_field_id
+        }
+      })
+      
+      console.log('原始ID到新ID映射:', Array.from(originalIdToNewIdMap.entries()))
+      
+      // 第二遍：更新parent_field_id（将原始ID转换为新ID）
+      const newFields = fieldsWithTempIds.map(field => {
+        const originalParentId = (field as any)._originalParentId
+        
+        if (originalParentId) {
+          // 查找原始parent_field_id对应的新ID
+          let parentNewId = originalIdToNewIdMap.get(String(originalParentId))
+          
+          if (!parentNewId) {
+            // 如果找不到映射，尝试直接匹配（可能是已经转换过的ID）
+            const parentField = fieldsWithTempIds.find(f => String(f.id) === String(originalParentId))
+            if (parentField) {
+              parentNewId = parentField.id
+            }
+          }
+          
+          if (parentNewId) {
+            console.log(`✓ 更新parent_field_id: ${field.field_key} 的父字段从 ${originalParentId} 更新为 ${parentNewId}`)
+            const { _originalParentId, ...fieldWithoutTemp } = field as any
+            return {
+              ...fieldWithoutTemp,
+              parent_field_id: parentNewId
+            }
+          } else {
+            console.warn(`✗ 找不到父字段ID: ${originalParentId}，字段: ${field.field_key}`)
+            const { _originalParentId, ...fieldWithoutTemp } = field as any
+            return {
+              ...fieldWithoutTemp,
+              parent_field_id: undefined
+            }
+          }
+        }
+        // 没有parent_field_id，直接返回
+        const { _originalParentId, ...fieldWithoutTemp } = field as any
+        return fieldWithoutTemp
+      })
+      
+      // 调试：打印更新后的字段关系
+      console.log('从Schema导入的字段（更新后）:', newFields.map(f => ({
+        id: f.id,
+        field_key: f.field_key,
+        parent_field_id: f.parent_field_id,
+        data_type: f.data_type,
+        hasParent: !!f.parent_field_id,
+        parentExists: f.parent_field_id ? newFields.some(pf => String(pf.id) === String(f.parent_field_id)) : false
+      })))
+      
+      // 将新字段ID添加到新字段集合中
+      const importedFieldIds = newFields.map(f => f.id!).filter(Boolean)
+      setNewFieldIds(new Set([...newFieldIds, ...importedFieldIds]))
+      
+      // 合并到现有字段（追加）
+      setFields([...fields, ...newFields])
+      setOriginalFields([...originalFields, ...newFields])
+      
+      // 如果导入的字段较多，自动展开
+      if (!isFieldsExpanded && fields.length + newFields.length > 3) {
+        onFieldsToggle()
+      }
+      
+      showSuccessToast(`成功从 JSON Schema 导入 ${newFields.length} 个字段`)
+    } catch (error: any) {
+      console.error('从 Schema 导入字段失败:', error)
+      showErrorToast(`导入失败: ${error.message || '未知错误'}`)
+    }
   }
   
   // 导出字段到Excel
@@ -2112,21 +2529,86 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
   }, [fields, templateSchema, templatePrompt, promptHash])
 
   // 删除字段
-  const handleDeleteField = (index: number) => {
-    if (confirm('确定要删除此字段吗？')) {
-      setFields(fields.filter((_, i) => i !== index))
+  const handleDeleteField = (fieldToDelete: TemplateField) => {
+    if (!confirm('确定要删除此字段吗？删除父字段将同时删除所有子字段。')) {
+      return
     }
+
+    // 找到要删除的字段在 fields 数组中的索引
+    const fieldIndex = fields.findIndex(f => f.id === fieldToDelete.id || 
+      (f.field_key === fieldToDelete.field_key && f.parent_field_id === fieldToDelete.parent_field_id))
+    
+    if (fieldIndex === -1) {
+      showErrorToast('找不到要删除的字段')
+      return
+    }
+
+    const field = fields[fieldIndex]
+    
+    // 收集要删除的所有字段（包括子字段）
+    const fieldsToDelete = new Set<string>()
+    const collectFieldsToDelete = (fieldId: string | undefined) => {
+      if (!fieldId) return
+      fieldsToDelete.add(fieldId)
+      // 查找所有子字段
+      fields.forEach(f => {
+        if (f.parent_field_id === fieldId) {
+          collectFieldsToDelete(f.id)
+        }
+      })
+    }
+    
+    // 收集要删除的字段ID
+    if (field.id) {
+      collectFieldsToDelete(field.id)
+    }
+
+    // 删除字段（包括所有子字段）
+    const updatedFields = fields.filter(f => !fieldsToDelete.has(f.id || ''))
+    
+    // 更新 newFieldIds（移除已删除的字段ID）
+    const updatedNewFieldIds = new Set(newFieldIds)
+    fieldsToDelete.forEach(id => updatedNewFieldIds.delete(id))
+    setNewFieldIds(updatedNewFieldIds)
+    
+    // 更新字段列表
+    setFields(updatedFields)
+    
+    // 更新原始字段列表（如果字段在原始列表中）
+    const updatedOriginalFields = originalFields.filter(f => !fieldsToDelete.has(f.id || ''))
+    setOriginalFields(updatedOriginalFields)
+    
+    showSuccessToast(`已删除 ${fieldsToDelete.size} 个字段`)
   }
 
   // 更新字段
-  const handleFieldChange = (index: number, field: Partial<TemplateField>) => {
+  const handleFieldChange = (fieldToUpdate: TemplateField | number, updates: Partial<TemplateField>) => {
+    let fieldIndex: number
+    
+    // 支持通过字段对象或索引更新
+    if (typeof fieldToUpdate === 'number') {
+      // 兼容旧代码：通过索引更新
+      fieldIndex = fieldToUpdate
+    } else {
+      // 通过字段对象更新：找到字段在 fields 数组中的索引
+      fieldIndex = fields.findIndex(f => 
+        f.id === fieldToUpdate.id || 
+        (f.field_key === fieldToUpdate.field_key && f.parent_field_id === fieldToUpdate.parent_field_id)
+      )
+      
+      if (fieldIndex === -1) {
+        console.error('找不到要更新的字段:', fieldToUpdate)
+        return
+      }
+    }
+    
     const updatedFields = fields.map((f, i) => 
-      i === index ? { ...f, ...field } : f
+      i === fieldIndex ? { ...f, ...updates } : f
     )
     setFields(updatedFields)
     
     // 如果字段被编辑（有内容），从新字段集合中移除红色标识
-    const currentField = updatedFields[index]
+    const currentField = updatedFields[fieldIndex]
     if (currentField.id && newFieldIds.has(currentField.id)) {
       // 检查字段是否有实际内容（不是空值）
       if (currentField.field_key || currentField.field_name || currentField.data_name) {
@@ -2328,18 +2810,33 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                   >
                     导入字段
                   </Button>
-                  {templateId && (
-                    <Button
-                      onClick={handleUpdateFieldsFromSchema}
-                      leftIcon={<FiRefreshCw />}
-                      size="sm"
-                      variant="outline"
-                      colorScheme="purple"
-                      title="根据 fixed_schema.json 更新字段结构为嵌套格式"
-                      isLoading={loading}
-                    >
-                      从 Schema 更新
-                    </Button>
+                  {/* 暂时隐藏这两个按钮 */}
+                  {false && (
+                    <>
+                      <Button
+                        onClick={handleImportFromSchema}
+                        leftIcon={<FiFileText />}
+                        size="sm"
+                        variant="outline"
+                        colorScheme="orange"
+                        title="从采购字段模板 JSON Schema 导入字段"
+                      >
+                        从 Schema 导入
+                      </Button>
+                      {templateId && (
+                        <Button
+                          onClick={handleUpdateFieldsFromSchema}
+                          leftIcon={<FiRefreshCw />}
+                          size="sm"
+                          variant="outline"
+                          colorScheme="purple"
+                          title="根据 fixed_schema.json 更新字段结构为嵌套格式"
+                          isLoading={loading}
+                        >
+                          从 Schema 更新
+                        </Button>
+                      )}
+                    </>
                   )}
                   <Button
                     onClick={handleExportFields}
@@ -2459,7 +2956,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                                 <Input
                                   size="sm"
                                   value={field.field_key}
-                                  onChange={(e) => handleFieldChange(actualIndex, { field_key: e.target.value })}
+                                  onChange={(e) => handleFieldChange(field, { field_key: e.target.value })}
                                   placeholder={displayInfo.isNested ? "如：buyer_info.name" : "如：invoice_no"}
                                   flex={1}
                                   fontFamily={displayInfo.isNested ? "monospace" : "inherit"}
@@ -2471,7 +2968,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                               <Input
                                 size="sm"
                                 value={field.field_name}
-                                onChange={(e) => handleFieldChange(actualIndex, { field_name: e.target.value })}
+                                onChange={(e) => handleFieldChange(field, { field_name: e.target.value })}
                                 placeholder="如：发票号码"
                               />
                             </Table.Cell>
@@ -2479,14 +2976,14 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                               <Input
                                 size="sm"
                                 value={field.data_name || ''}
-                                onChange={(e) => handleFieldChange(actualIndex, { data_name: e.target.value })}
+                                onChange={(e) => handleFieldChange(field, { data_name: e.target.value })}
                                 placeholder="如：invoiceNo"
                               />
                             </Table.Cell>
                             <Table.Cell>
                               <select
                                 value={field.data_type || 'string'}
-                                onChange={(e) => handleFieldChange(actualIndex, { data_type: e.target.value })}
+                                onChange={(e) => handleFieldChange(field, { data_type: e.target.value })}
                                 style={{
                                   width: '100%',
                                   padding: '4px',
@@ -2508,7 +3005,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                             <Table.Cell>
                               <select
                                 value={field.is_required ? 'true' : 'false'}
-                                onChange={(e) => handleFieldChange(actualIndex, { is_required: e.target.value === 'true' })}
+                                onChange={(e) => handleFieldChange(field, { is_required: e.target.value === 'true' })}
                                 style={{
                                   width: '100%',
                                   padding: '4px',
@@ -2525,7 +3022,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                               <Input
                                 size="sm"
                                 value={field.description || ''}
-                                onChange={(e) => handleFieldChange(actualIndex, { description: e.target.value })}
+                                onChange={(e) => handleFieldChange(field, { description: e.target.value })}
                                 placeholder="字段描述"
                               />
                             </Table.Cell>
@@ -2533,7 +3030,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                               <Input
                                 size="sm"
                                 value={field.example || ''}
-                                onChange={(e) => handleFieldChange(actualIndex, { example: e.target.value })}
+                                onChange={(e) => handleFieldChange(field, { example: e.target.value })}
                                 placeholder="示例值"
                               />
                             </Table.Cell>
@@ -2571,13 +3068,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                                   _active={{ bg: "gray.100" }}
                                   title="删除字段"
                                   onClick={() => {
-                                    // 从新字段集合中移除
-                                    if (field.id) {
-                                      const updatedNewFieldIds = new Set(newFieldIds)
-                                      updatedNewFieldIds.delete(field.id)
-                                      setNewFieldIds(updatedNewFieldIds)
-                                    }
-                                    handleDeleteField(actualIndex)
+                                    handleDeleteField(field)
                                   }}
                                 />
                               </Box>
@@ -2646,7 +3137,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                                     <Input
                                       size="sm"
                                       value={field.field_key}
-                                      onChange={(e) => handleFieldChange(actualIndex, { field_key: e.target.value })}
+                                      onChange={(e) => handleFieldChange(field, { field_key: e.target.value })}
                                       placeholder={displayInfo.isNested ? "如：buyer_info.name" : "如：invoice_no"}
                                       flex={1}
                                       fontFamily={displayInfo.isNested ? "monospace" : "inherit"}
@@ -2658,7 +3149,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                                   <Input
                                     size="sm"
                                     value={field.field_name}
-                                    onChange={(e) => handleFieldChange(actualIndex, { field_name: e.target.value })}
+                                    onChange={(e) => handleFieldChange(field, { field_name: e.target.value })}
                                     placeholder="如：发票号码"
                                   />
                                 </Table.Cell>
@@ -2666,14 +3157,14 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                                   <Input
                                     size="sm"
                                     value={field.data_name || ''}
-                                    onChange={(e) => handleFieldChange(actualIndex, { data_name: e.target.value })}
+                                    onChange={(e) => handleFieldChange(field, { data_name: e.target.value })}
                                     placeholder="如：invoiceNo"
                                   />
                                 </Table.Cell>
                                 <Table.Cell>
                                   <select
                                     value={field.data_type || 'string'}
-                                    onChange={(e) => handleFieldChange(actualIndex, { data_type: e.target.value })}
+                                    onChange={(e) => handleFieldChange(field, { data_type: e.target.value })}
                                     style={{
                                       width: '100%',
                                       padding: '4px',
@@ -2695,7 +3186,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                                 <Table.Cell>
                                   <select
                                     value={field.is_required ? 'true' : 'false'}
-                                    onChange={(e) => handleFieldChange(actualIndex, { is_required: e.target.value === 'true' })}
+                                    onChange={(e) => handleFieldChange(field, { is_required: e.target.value === 'true' })}
                                     style={{
                                       width: '100%',
                                       padding: '4px',
@@ -2712,7 +3203,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                                   <Input
                                     size="sm"
                                     value={field.description || ''}
-                                    onChange={(e) => handleFieldChange(actualIndex, { description: e.target.value })}
+                                    onChange={(e) => handleFieldChange(field, { description: e.target.value })}
                                     placeholder="字段描述"
                                   />
                                 </Table.Cell>
@@ -2720,7 +3211,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                                   <Input
                                     size="sm"
                                     value={field.example || ''}
-                                    onChange={(e) => handleFieldChange(actualIndex, { example: e.target.value })}
+                                    onChange={(e) => handleFieldChange(field, { example: e.target.value })}
                                     placeholder="示例值"
                                   />
                                 </Table.Cell>
@@ -2758,13 +3249,7 @@ const TemplateEditEnhanced = ({ templateId }: { templateId?: string }) => {
                                       _active={{ bg: "gray.100" }}
                                       title="删除字段"
                                       onClick={() => {
-                                        // 从新字段集合中移除
-                                        if (field.id) {
-                                          const updatedNewFieldIds = new Set(newFieldIds)
-                                          updatedNewFieldIds.delete(field.id)
-                                          setNewFieldIds(updatedNewFieldIds)
-                                        }
-                                        handleDeleteField(actualIndex)
+                                        handleDeleteField(field)
                                       }}
                                     />
                                   </Box>

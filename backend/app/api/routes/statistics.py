@@ -178,6 +178,11 @@ def get_statistics_overview(
             "daily_stats": daily_stats
         }
     except Exception as e:
+        import logging
+        import traceback
+        logger = logging.getLogger(__name__)
+        logger.error(f"获取统计数据失败: {str(e)}", exc_info=True)
+        logger.error(f"错误堆栈: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"获取统计数据失败: {str(e)}")
 
 
