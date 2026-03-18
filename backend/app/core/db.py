@@ -8,6 +8,52 @@ from app.models import User, UserCreate
 # 如果连接字符串是postgresql://，需要转换为postgresql+psycopg://
 database_url = str(settings.SQLALCHEMY_DATABASE_URI)
 
+# ---- 连接诊断（脱敏）----
+def _redact_db_url(url: str) -> str:
+    try:
+        # 简单脱敏：隐藏密码段 user:pass@
+        if "@" in url and "://" in url:
+            scheme, rest = url.split("://", 1)
+            if "@" in rest and ":" in rest.split("@", 1)[0]:
+                cred, after = rest.split("@", 1)
+                user = cred.split(":", 1)[0]
+                return f"{scheme}://{user}:***@{after}"
+        return url
+    except Exception:
+        return "<redacted>"
+
+def _parse_host_port_db(url: str) -> tuple[str | None, int | None]:
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(url)
+        return p.hostname, (p.port or None)
+    except Exception:
+        return None, None
+
+def _tcp_probe(host: str, port: int, timeout_s: float = 3.0) -> tuple[bool, str]:
+    import socket
+    try:
+        # DNS
+        try:
+            addrs = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            resolved = sorted({a[4][0] for a in addrs})
+        except Exception as e:
+            return False, f"DNS解析失败: {e}"
+
+        # TCP connect
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout_s)
+        try:
+            s.connect((host, port))
+            return True, f"TCP连通: {host}:{port}, resolved={resolved}"
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+    except Exception as e:
+        return False, f"TCP不可达: {host}:{port}, err={e}"
+
 # 确保使用 psycopg3 驱动
 # 处理各种可能的 URL 格式
 if database_url.startswith("postgresql://"):
@@ -120,6 +166,25 @@ try:
         """异步测试连接，使用更长的超时时间"""
         import time
         try:
+            # 打印最终生效的连接目标（脱敏）
+            redacted = _redact_db_url(database_url)
+            host, port = _parse_host_port_db(database_url)
+            logger.info(f"数据库连接目标(脱敏): {redacted}")
+            # 提醒：如果 DATABASE_URL 存在，会覆盖 POSTGRES_* 组装的连接串
+            if settings.DATABASE_URL:
+                logger.warning("检测到 DATABASE_URL 已设置：将优先使用 DATABASE_URL（可能覆盖 POSTGRES_* 配置）")
+            else:
+                logger.info("未设置 DATABASE_URL：将使用 POSTGRES_* 配置组装连接串")
+
+            if host and port:
+                ok, msg = _tcp_probe(host, port, timeout_s=3.0)
+                if ok:
+                    logger.info(f"数据库TCP探测成功: {msg}")
+                else:
+                    logger.warning(f"数据库TCP探测失败: {msg}")
+            else:
+                logger.warning("无法从连接串解析 host/port，跳过TCP探测")
+
             # 对于远程数据库，给更多时间建立连接
             start_time = time.time()
             with engine.connect() as test_conn:
@@ -128,7 +193,9 @@ try:
             logger.info(f"数据库连接测试成功 (耗时: {elapsed:.2f}秒)")
         except Exception as test_error:
             elapsed = time.time() - start_time if 'start_time' in locals() else 0
-            logger.warning(f"数据库连接测试失败 (耗时: {elapsed:.2f}秒): {test_error}")
+            # 输出更丰富的异常信息
+            err_type = type(test_error).__name__
+            logger.warning(f"数据库连接测试失败 (耗时: {elapsed:.2f}秒) [{err_type}]: {test_error}", exc_info=True)
             logger.info("引擎已创建，将在实际使用时自动重连（pool_pre_ping=True）")
     
     # 在后台测试连接（不阻塞）

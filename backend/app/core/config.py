@@ -14,7 +14,9 @@ class Settings(BaseSettings):
         # 启动目录可能是 backend/ 或仓库根目录，兼容两种运行方式：
         # - 在 backend/ 目录启动：优先读取 ../.env
         # - 在仓库根目录启动：读取 ./.env
-        env_file=("../.env", ".env"),
+        # 注意：如果同时存在 backend/.env 和 根目录 .env，我们希望“根目录 .env”覆盖 backend/.env。
+        # 因此这里将 backend/.env 放在前，根目录 ../.env 放在后。
+        env_file=(".env", "../.env"),
         env_ignore_empty=True,
         extra="ignore"
     )
@@ -47,14 +49,14 @@ class Settings(BaseSettings):
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         """生成业务数据库的SQLAlchemy连接字符串"""
-        # 优先使用 DATABASE_URL
-        if self.DATABASE_URL:
-            return str(self.DATABASE_URL)
-        
-        # 如果 DATABASE_URL 不存在，使用 POSTGRES_* 配置构建
+        # 优先使用 POSTGRES_* 配置构建（更直观，且可避免历史遗留 DATABASE_URL 指向错误库）
         if self.POSTGRES_SERVER and self.POSTGRES_USER and self.POSTGRES_DB:
             password = self.POSTGRES_PASSWORD or ""
             return f"postgresql+psycopg://{self.POSTGRES_USER}:{password}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+
+        # 回退：使用 DATABASE_URL
+        if self.DATABASE_URL:
+            return str(self.DATABASE_URL)
         
         raise ValueError("DATABASE_URL or (POSTGRES_SERVER, POSTGRES_USER, POSTGRES_DB) must be set in .env file")
         

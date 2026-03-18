@@ -7,3 +7,4 @@ node_modules/
 backend/uploads/
 backend/.env
 .env
+NUL
