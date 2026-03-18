@@ -11,7 +11,10 @@ def parse_cors(v: Any) -> list[str] | str:
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # 启动目录可能是 backend/ 或仓库根目录，兼容两种运行方式：
+        # - 在 backend/ 目录启动：优先读取 ../.env
+        # - 在仓库根目录启动：读取 ./.env
+        env_file=("../.env", ".env"),
         env_ignore_empty=True,
         extra="ignore"
     )
