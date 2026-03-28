@@ -29,7 +29,7 @@
     "react-error-boundary": "^5.0.0",
     "react-hook-form": "7.49.3",
     "react-icons": "^5.5.0",
-    "react-konva": "^18.2.12",
+    "react-konva": "^19.2.1",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
