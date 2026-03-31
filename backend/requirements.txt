@@ -5,7 +5,7 @@
 # This file contains all dependencies with pinned versions for reproducible builds
  
 # Main dependencies (from pyproject.toml)
-alembic==1.17.2
+alembic==1.18.1
 bcrypt==4.3.0
 email-validator==2.3.0
 emails==0.6
